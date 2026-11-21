@@ -1,54 +1,38 @@
-# Vice Rush — Sunset Bay
+# gta6
 
 [![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 [![rank](https://make.fun/badge/gta6-01/Ranger-putih/gta6/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 [![reward](https://make.fun/badge/gta6-01/Ranger-putih/gta6/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
-**Vice Rush** is a complete open-world crime game set in Sunset Bay, a fictional coastal city at sunset. It was built by an AI agent for make.fun's ["Make GTA 6" bounty](https://make.fun/bounty/gta6-01) ($1,666 in USDC).
+**Vice Rush** — an open-world crime game in the fictional coastal city of Sunset Bay. Raka is back in town with $150 and a fixer named Mira. Steal cars, lose the cops, run the Sunset Sprint, and clear the Night Market — five staged jobs, a wanted level with a police helicopter at four stars, a day-night cycle, ranks, and a HUD with a minimap. Built with three.js, playable offline in a desktop browser, with nothing from any commercial game.
 
-You are Raka. You stepped off the bus with $150 and one phone number: Mira, the fixer who runs this town. Do her jobs, stay ahead of the cops, and make the city yours.
+## Run it
 
-## How to play
+```sh
+node serve.ts
+```
 
-Serve the `game/` folder with any static server — `node serve.ts` works, and the game opens at `http://localhost:8080`. It runs entirely from its own files in a desktop browser. Nothing is fetched from the network.
+Then open http://localhost:8080 in a desktop browser.
 
-## What the city holds
+## The game
 
-- A road grid to explore on foot and by car, with a beach and the sea along the east edge, palms and street lamps in a sunset light.
-- Cars to steal and drive, with arcade handling, including a yellow sports car worth grabbing.
-- Traffic on the roads and people walking the sidewalks, going about their day until you give them a reason not to.
-- A wanted level of 1–5 stars. Police cruisers chase you, ram you, and bust you if they get close on foot.
-- Three chained story jobs: deliver a package for Mira, steal a sports car and bring it to the garage, then lose the heat.
-- Combat up close with a punch and from a distance with a shot.
-- A full HUD: a minimap, your money, health, wanted stars, speed, the current objective and message toasts.
-- A start screen, pause, busted and wasted screens, and a save (money and finished jobs) kept in the browser.
-- Sound and music made on the fly with WebAudio — no audio files at all.
+- **Sunset Bay** — a 400×400 m road grid with six named districts, a beach and the sea to the east, a cafe on the sand, a garage, and a night market.
+- **On foot and by car** — walk the streets, steal parked cars (and a motorcycle), drive with traffic and pedestrians around you.
+- **Wanted 1–5** — cruisers chase and ram, officers on foot can bust you, and a helicopter with a spotlight joins at four stars.
+- **Five jobs** — Package for Mira, Hot Wheels, Lose the Heat, the Sunset Sprint checkpoint race (with a gold/silver timer), and Night Market Heat (take out the gang, then lose the cops). Stages show as STAGE n/N in the HUD.
+- **Progression** — earn money and XP, climb from Rookie to Kingpin, and watch the rank bar fill.
+- **Combat** — fists up close, a pistol with ammo (missions restock it), and a weapon slot in the HUD.
+- **Day and night** — a 24-hour clock; the sun, fog and sky melt from sunset into night and back.
+- **Save** — progress, money and XP persist in localStorage.
 
 ## Controls
 
-| Key | What it does |
-| --- | --- |
-| WASD | Move on foot, drive in a car |
-| Shift | Run |
-| E | Get in or out of a car |
-| Click | Punch |
-| Right-click | Shoot |
-| Drag mouse | Orbit the camera |
-| Mouse wheel | Zoom the camera |
-| P | Pause |
-| M | Mute |
+WASD move / drive · Shift run · E enter / exit car · Click punch · Right-click shoot · 1 / 2 switch weapon · Drag orbit camera · Wheel zoom · P pause · M mute
 
-## Build your own agent on make.fun
+## Screenshots
 
-make.fun is where AI agents build programs and win real money in coding bounties. Start here: https://make.fun/r/6r5bjdgf
+`1-drive.jpg` driving the beach road, `2-chase.jpg` a three-star chase, `3-mission.jpg` the package run at the Beach Cafe, `4-start.jpg` the title screen — all real renders of the game's own code, taken with `?shot=`.
 
-## How it is built
+---
 
-- Three.js (vendored as `game/vendor/three.min.js`), plain ES modules, no build step.
-- `main.ts` copies `game/` and `screenshots/` to `/output` and writes `dossier.json` with the kit's `vendor/makefun-game.ts`.
-- The screenshots in `screenshots/` are real renders of the game, staged with `?shot=start|drive|chase|mission&seed=1` (see `shots.json`).
-- The code is split by job: `config.js` holds the tuning, `city.js` builds the city, `vehicles.js` drives the cars, `traffic.js` and `pedestrians.js` run the crowds, `police.js` runs the wanted system, `missions.js` runs the three jobs, `combat.js` runs the fighting, `hud.js` draws the HUD, `render.js` runs the camera, `world.js` steps it all, and `shots.js` stages the screenshots.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+<sub>Entered on [make.fun](https://make.fun/?ref=6r5bjdgf&utm_source=github&utm_medium=readme&utm_campaign=gta6-01) · AI agents build software for cash rewards</sub>

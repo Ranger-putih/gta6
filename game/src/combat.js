@@ -1,120 +1,125 @@
-// Combat: a punch up close and a shot from a distance. Both are simple
-// ground-plane tests (no raycaster): the punch hits the nearest person in
-// front of the player, the shot hits the first person or car along the aim
-// line. Hitting anyone raises the wanted level, because that is what a
-// crime is.
+// Combat for Vice Rush. Fists for up close, a pistol for everything
+// else. A shot is a ray from the player toward the crosshair: the first
+// living person inside a narrow cone takes the hit. Hurting a civilian
+// is a crime; taking out a gang member is the Night Market mission.
 
-import { CONFIG } from './config.js';
-import { dist2d, angleTo } from './random.js';
+import { WEAPONS, MAX_AMMO } from './config.js';
+import { audio } from './audio.js';
 
 export class Combat {
   constructor() {
-    this.punchTimer = 0;
-    this.shootTimer = 0;
-    // A muzzle flash the renderer draws for a blink after a shot.
-    this.flashTimer = 0;
-    this.flashAt = { x: 0, z: 0 };
+    this.weaponKey = 'fists';
+    this.ammo = WEAPONS.pistol.ammo;
+    this.cooldown = 0;
   }
 
-  update(dt) {
-    this.punchTimer = Math.max(0, this.punchTimer - dt);
-    this.shootTimer = Math.max(0, this.shootTimer - dt);
-    this.flashTimer = Math.max(0, this.flashTimer - dt);
+  get weapon() {
+    return WEAPONS[this.weaponKey];
   }
 
-  // Punch the nearest walker or cop in front of the player.
-  punch(world) {
-    if (this.punchTimer > 0) return false;
-    this.punchTimer = CONFIG.combat.punchCooldown;
-    const p = world.player;
-    const fx = Math.sin(p.heading);
-    const fz = Math.cos(p.heading);
-    const range = CONFIG.combat.punchRange;
-    const dmg = CONFIG.combat.punchDamage;
-
-    // Walkers first.
-    for (const w of world.pedestrians.walkers) {
-      if (w.down) continue;
-      const dx = w.x - p.x;
-      const dz = w.z - p.z;
-      const d = Math.hypot(dx, dz);
-      if (d < range && dx * fx + dz * fz > 0) {
-        w.health -= dmg;
-        if (w.health <= 0) {
-          w.down = true;
-          w.downTimer = 3;
-          world.police.addWanted(CONFIG.wanted.hitPedestrian);
-          world.toast('You knocked someone out. The cops noticed.');
-        }
-        world.audio.punch();
-        return true;
-      }
+  switchWeapon(key) {
+    if (WEAPONS[key]) {
+      this.weaponKey = key;
+      audio.click();
+      return true;
     }
-    // Then the police on foot (there are none on foot in this build, but a
-    // punch at a cruiser still counts as hitting the law).
-    for (const car of world.police.cars) {
-      const d = dist2d(p.x, p.z, car.x, car.z);
-      if (d < range + 1.2) {
-        world.police.addWanted(CONFIG.wanted.punchCop);
-        world.toast('You hit a police car. Bad idea.');
-        world.audio.punch();
-        return true;
-      }
-    }
-    world.audio.punch();
     return false;
   }
 
-  // Shoot along the player's aim (the camera's forward on the ground).
-  // Returns true when something was hit.
-  shoot(world) {
-    if (this.shootTimer > 0) return false;
-    this.shootTimer = CONFIG.combat.shootCooldown;
-    const p = world.player;
-    const fx = Math.sin(p.heading);
-    const fz = Math.cos(p.heading);
-    const range = CONFIG.combat.shootRange;
-    const dmg = CONFIG.combat.shootDamage;
-    world.audio.shoot();
-    this.flashTimer = 0.09;
-    this.flashAt = { x: p.x + fx * 1.6, z: p.z + fz * 1.6 };
+  addAmmo(n) {
+    this.ammo = Math.min(MAX_AMMO, this.ammo + n);
+  }
 
-    // The nearest thing along the aim line, walkers and police cars alike.
+  update(dt) {
+    if (this.cooldown > 0) this.cooldown -= dt;
+  }
+
+  // The nearest living person inside a cone in front of the player.
+  // dirX/dirZ is the facing direction, maxDist the reach.
+  static nearestInCone(people, px, pz, dirX, dirZ, maxDist, coneCos) {
     let best = null;
-    let bestD = range;
-    const consider = (x, z, radius, kind, ref) => {
-      const dx = x - p.x;
-      const dz = z - p.z;
-      const along = dx * fx + dz * fz;
-      if (along <= 0 || along > bestD) return;
-      const side = Math.abs(dx * fz - dz * fx);
-      if (side < radius + 0.6) {
-        best = { kind, ref, along };
-        bestD = along;
+    let bestD = Infinity;
+    for (const p of people) {
+      if (!p.alive) continue;
+      const dx = p.x - px;
+      const dz = p.z - pz;
+      const d = Math.hypot(dx, dz);
+      if (d > maxDist || d < 0.01) continue;
+      const cos = (dx * dirX + dz * dirZ) / d;
+      if (cos < coneCos) continue;
+      if (d < bestD) {
+        bestD = d;
+        best = p;
       }
-    };
-    for (const w of world.pedestrians.walkers) {
-      if (!w.down) consider(w.x, w.z, 0.6, 'ped', w);
     }
-    for (const car of world.police.cars) {
-      consider(car.x, car.z, 1.8, 'cop', car);
-    }
-    if (!best) return false;
+    return best;
+  }
 
-    if (best.kind === 'ped') {
-      best.ref.health -= dmg;
-      if (best.ref.health <= 0) {
-        best.ref.down = true;
-        best.ref.downTimer = 3;
-      }
-      world.police.addWanted(CONFIG.wanted.hitPedestrian);
-    } else {
-      best.ref.health = (best.ref.health || CONFIG.combat.copHealth) - dmg;
-      if (best.ref.health <= 0) {
-        world.police.removeCar(best.ref);
-      }
-      world.police.addWanted(CONFIG.wanted.shoot);
+  // A punch: short reach, no ammo, a thud and a fallen pedestrian.
+  // Returns the person hit, or null.
+  punch(world) {
+    if (this.cooldown > 0) return null;
+    this.cooldown = WEAPONS.fists.rate;
+    audio.punch();
+    const p = world.player;
+    const dirX = Math.sin(p.heading);
+    const dirZ = Math.cos(p.heading);
+    const people = [...world.pedestrians.walkers, ...world.pedestrians.gang, ...world.police.officers];
+    const hit = Combat.nearestInCone(people, p.x, p.z, dirX, dirZ, WEAPONS.fists.range, 0.5);
+    if (!hit) return null;
+    this.applyHit(world, hit, WEAPONS.fists.damage);
+    return hit;
+  }
+
+  // A shot: long reach, eats one round, a crack and a muzzle blink.
+  // Returns the person hit, or null. No ammo means a dry click.
+  shoot(world) {
+    if (this.cooldown > 0) return null;
+    if (this.weaponKey !== 'pistol') return this.punch(world);
+    if (this.ammo <= 0) {
+      this.cooldown = 0.3;
+      audio.click();
+      world.hud.toast('NO AMMO — finish a mission to restock');
+      return null;
     }
-    return true;
+    this.cooldown = this.weapon.rate;
+    this.ammo -= 1;
+    audio.shoot();
+    const p = world.player;
+    const dirX = Math.sin(p.heading);
+    const dirZ = Math.cos(p.heading);
+    const people = [...world.pedestrians.walkers, ...world.pedestrians.gang, ...world.police.officers];
+    const hit = Combat.nearestInCone(people, p.x, p.z, dirX, dirZ, WEAPONS.pistol.range, 0.94);
+    if (!hit) return null;
+    this.applyHit(world, hit, WEAPONS.pistol.damage);
+    return hit;
+  }
+
+  // Resolve a hit: gang members count for the mission, everyone else is
+  // a crime the police notice.
+  applyHit(world, person, damage) {
+    void damage;
+    const isGang = world.pedestrians.gang.includes(person);
+    const isOfficer = world.police.officers.includes(person);
+    if (isGang) {
+      const wasGang = world.pedestrians.eliminate(person);
+      audio.hit();
+      if (wasGang) {
+        world.missions.onGangDown();
+        world.addXp(25);
+      }
+      return;
+    }
+    // A civilian or an officer goes down; the city notices.
+    world.pedestrians.knockDown(person);
+    if (isOfficer) {
+      person.alive = false;
+      world.police.addWanted(2);
+      world.hud.toast('You took down an officer — 2 stars');
+    } else {
+      world.police.addWanted(1);
+      world.hud.toast('A pedestrian is down — the cops noticed');
+    }
+    audio.hit();
   }
 }

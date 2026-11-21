@@ -1,168 +1,201 @@
-// The three story missions, chained in order. Each one names its target,
-// its radius and its reward in config.js; this file only runs the state
-// machine and draws the yellow beacon that marks where to go.
-// The markers sit outside their buildings on purpose: the mission 1 target
-// is on the sand north of the Beach Cafe (the cafe box ends at z -34, the
-// marker is at z -30), and the mission 2 target is north of the garage (the
-// garage box ends at z 161, the marker is at z 152). A marker inside a
-// building collider can never be reached, and that is the bug this rebuild
-// exists to fix.
+// Missions for Vice Rush. Five jobs, chained in order, each a chain of
+// named stages: the HUD shows STAGE n/N so the player always knows
+// where they stand. A stage is one verb — reach a point, steal a car,
+// deliver it, race checkpoints on a timer, take out a gang, lose the
+// cops — and every target sits on open ground, never inside a building.
 
-import * as THREE from 'three';
-import { CONFIG } from './config.js';
-import { dist2d } from './random.js';
+import { MISSIONS } from './config.js';
+import { audio } from './audio.js';
+
+function dist(ax, az, bx, bz) {
+  return Math.hypot(ax - bx, az - bz);
+}
 
 export class Missions {
-  constructor(scene) {
-    this.scene = scene;
+  constructor(world) {
+    this.world = world;
     this.index = 0;
+    this.stage = 0;
     this.done = [];
-    this.stage = 'reach'; // reach | steal | deliver | escape
-    this.escapeArmed = false;
-    this.beacon = this.makeBeacon();
-    scene.add(this.beacon.group);
-    this.updateBeacon();
+    this.active = false;
+    this.timer = 0;
+    this.raceCp = 0;
+    this.eliminated = 0;
+    this.rating = null;
+    this.gangSpawned = false;
   }
 
-  makeBeacon() {
-    const group = new THREE.Group();
-    // A flat ring on the ground plus a tall beam of light, both warm yellow.
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(2.4, 0.22, 10, 40),
-      new THREE.MeshStandardMaterial({
-        color: 0xffd94d, emissive: 0xffc21a, emissiveIntensity: 1.6,
-        transparent: true, opacity: 0.95,
-      }),
-    );
-    ring.rotation.x = Math.PI / 2;
-    ring.position.y = 0.25;
-    group.add(ring);
-    const beam = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.9, 1.6, 42, 12, 1, true),
-      new THREE.MeshBasicMaterial({
-        color: 0xffd94d, transparent: true, opacity: 0.16,
-        side: THREE.DoubleSide, depthWrite: false,
-      }),
-    );
-    beam.position.y = 21;
-    group.add(beam);
-    return { group, ring, beam };
+  get current() {
+    return MISSIONS[this.index] || null;
   }
 
-  current() {
-    return CONFIG.missions[this.index] || null;
+  get currentStage() {
+    const m = this.current;
+    return m ? m.stages[this.stage] : null;
   }
 
-  allDone() {
-    return this.index >= CONFIG.missions.length;
+  get stageCount() {
+    const m = this.current;
+    return m ? m.stages.length : 0;
   }
 
-  // Where the beacon points right now (null when no mission is active).
-  targetPos() {
-    const m = this.current();
-    if (!m) return null;
-    if (m.type === 'steal-deliver') {
-      return this.stage === 'steal' ? m.carAt : m.target;
+  start() {
+    this.active = true;
+    this.index = 0;
+    this.stage = 0;
+    this.done = [];
+    this.beginStage();
+  }
+
+  // Restore progress from a save: skip the missions already done.
+  restore(doneIds) {
+    this.done = (doneIds || []).slice();
+    let i = 0;
+    while (i < MISSIONS.length && this.done.includes(MISSIONS[i].id)) i++;
+    this.index = Math.min(i, MISSIONS.length - 1);
+    this.stage = 0;
+    this.active = this.index < MISSIONS.length;
+    if (this.active) this.beginStage();
+  }
+
+  // Side effects when a stage begins: spawn the gang, light the wanted
+  // level for an escape, start the race clock, and make sure the car a
+  // delivery needs is still drivable.
+  beginStage() {
+    const m = this.current;
+    const s = this.currentStage;
+    if (!m || !s) return;
+    if (s.type === 'deliver') {
+      // The sports car is Mira's prize: it cannot arrive wrecked.
+      this.world.sportsCar.repair();
     }
-    return m.target || null;
+    if (s.type === 'race') {
+      this.timer = 0;
+      this.raceCp = 0;
+      this.rating = null;
+    }
+    if (s.type === 'eliminate') {
+      this.eliminated = 0;
+      this.world.pedestrians.spawnGang();
+      this.gangSpawned = true;
+    }
+    if (s.type === 'escape') {
+      // An escape only works if there is heat to lose.
+      const heat = m.id === 'escape' ? 3 : 2;
+      this.world.police.setWanted(heat);
+      this.world.hud.toast('The cops are onto you — lose them!');
+    }
   }
 
-  objectiveText() {
-    const m = this.current();
-    if (!m) return 'All jobs done — Sunset Bay is yours. Free roam!';
-    if (m.type === 'steal-deliver' && this.stage === 'steal') {
-      return `${m.title}: steal the yellow sports car.`;
+  // Called by combat when a gang member goes down.
+  onGangDown() {
+    if (!this.active) return;
+    const s = this.currentStage;
+    if (s && s.type === 'eliminate') {
+      this.eliminated += 1;
+      this.world.hud.toast(`Gang down — ${this.eliminated}/${s.count}`);
     }
-    if (m.type === 'steal-deliver' && this.stage === 'deliver') {
-      return `${m.title}: deliver the sports car to the garage marker.`;
-    }
-    if (m.type === 'escape') {
-      return `${m.title}: lose the cops and get your wanted level to zero.`;
-    }
-    return `${m.title}: ${m.brief}`;
   }
 
-  updateBeacon() {
-    const pos = this.targetPos();
-    if (!pos) {
-      this.beacon.group.visible = false;
+  update(dt) {
+    if (!this.active) return;
+    const m = this.current;
+    const s = this.currentStage;
+    if (!m || !s) return;
+    const p = this.world.player;
+
+    if (s.type === 'goto') {
+      if (dist(p.x, p.z, s.x, s.z) < s.radius) this.completeStage();
+    } else if (s.type === 'steal') {
+      if (p.car === this.world.sportsCar) this.completeStage();
+    } else if (s.type === 'deliver') {
+      if (p.car === this.world.sportsCar && dist(p.x, p.z, s.x, s.z) < s.radius) this.completeStage();
+    } else if (s.type === 'race') {
+      this.timer += dt;
+      const cp = s.checkpoints[this.raceCp];
+      if (cp && dist(p.x, p.z, cp.x, cp.z) < 10) {
+        this.raceCp += 1;
+        audio.checkpoint();
+        this.world.hud.toast(`CHECKPOINT ${this.raceCp}/${s.checkpoints.length}`);
+        if (this.raceCp >= s.checkpoints.length) this.completeStage();
+      }
+    } else if (s.type === 'eliminate') {
+      if (this.eliminated >= s.count) this.completeStage();
+    } else if (s.type === 'escape') {
+      if (this.world.police.wanted <= 0) this.completeStage();
+    }
+  }
+
+  completeStage() {
+    const m = this.current;
+    const s = this.currentStage;
+    audio.pickup();
+    this.stage += 1;
+    if (this.stage >= m.stages.length) {
+      this.completeMission();
       return;
     }
-    this.beacon.group.visible = true;
-    this.beacon.group.position.set(pos.x, 0, pos.z);
+    const next = this.currentStage;
+    this.world.hud.toast(`STAGE ${this.stage + 1}/${m.stages.length} — ${next.name}`);
+    this.beginStage();
   }
 
-  // Spin the beacon ring slowly; called every frame with the world time.
-  animateBeacon(elapsed) {
-    if (!this.beacon.group.visible) return;
-    this.beacon.ring.rotation.z = elapsed * 0.8;
-    const pulse = 0.85 + Math.sin(elapsed * 2.4) * 0.15;
-    this.beacon.ring.material.opacity = pulse;
-  }
-
-  complete(world, mission) {
-    world.player.money += mission.reward;
-    this.done.push(mission.id);
+  completeMission() {
+    const m = this.current;
+    this.world.addMoney(m.reward);
+    this.world.addXp(m.xp);
+    this.world.combat.addAmmo(24);
+    let extra = '';
+    if (m.id === 'sprint') {
+      const t = this.timer;
+      this.rating = t <= m.stages[1].gold ? 'GOLD' : t <= m.stages[1].silver ? 'SILVER' : 'BRONZE';
+      extra = ` — ${this.rating} in ${t.toFixed(1)}s`;
+    }
+    this.done.push(m.id);
+    audio.missionDone();
+    this.world.hud.toast(`Job done: ${m.name} — +$${m.reward}${extra}`);
+    this.world.save();
     this.index += 1;
-    this.stage = 'reach';
-    this.escapeArmed = false;
-    // The car job puts the cops on Raka: the escape mission starts with real
-    // heat, so there is always something to lose. Without this the wanted
-    // level from the theft fades away on the drive to the garage and the
-    // escape can never arm (it needs wanted >= 2 before it can complete
-    // at zero), so a clean delivery would leave the third mission stuck.
-    const next = this.current();
-    if (next && next.type === 'escape') {
-      world.police.setWanted(3);
-      world.toast('The cops are onto you — lose them!');
+    this.stage = 0;
+    if (this.index >= MISSIONS.length) {
+      this.active = false;
+      this.world.hud.toast('All jobs done — Sunset Bay is yours, Raka.');
+      return;
     }
-    this.updateBeacon();
-    return mission.reward;
+    const next = this.current;
+    this.world.hud.toast(`NEW JOB: ${next.name} — ${next.brief}`);
+    this.beginStage();
   }
 
-  // Advance the missions. `world` gives the player, the police and the audio.
-  // Returns the mission that completed this frame, if any.
-  update(dt, world) {
-    const m = this.current();
-    if (!m) return null;
-    const p = world.player;
-
-    if (m.type === 'reach') {
-      const d = dist2d(p.x, p.z, m.target.x, m.target.z);
-      if (d <= m.radius) {
-        return this.complete(world, m);
-      }
-      return null;
-    }
-
-    if (m.type === 'steal-deliver') {
-      if (this.stage === 'steal') {
-        // The sports car is the yellow one parked at carAt; getting in it
-        // flips the mission to the delivery leg.
-        if (p.inCar && p.car && p.car.isSportsCar) {
-          this.stage = 'deliver';
-          this.updateBeacon();
-          world.toast('Nice ride. Now get it to the garage marker.');
-        }
-        return null;
-      }
-      const d = dist2d(p.x, p.z, m.target.x, m.target.z);
-      if (p.inCar && d <= m.radius) {
-        return this.complete(world, m);
-      }
-      return null;
-    }
-
-    if (m.type === 'escape') {
-      // Arm once the heat is on, then complete when it is fully gone.
-      if (!this.escapeArmed && world.police.wanted >= 2) {
-        this.escapeArmed = true;
-      }
-      if (this.escapeArmed && world.police.wanted === 0) {
-        return this.complete(world, m);
-      }
-      return null;
-    }
+  // The point the minimap beacon and the world marker aim at, or null
+  // when the current stage has no single point (an escape).
+  targetPos() {
+    const s = this.currentStage;
+    if (!s) return null;
+    if (s.type === 'goto' || s.type === 'deliver') return { x: s.x, z: s.z };
+    if (s.type === 'steal') return { x: this.world.sportsCar.x, z: this.world.sportsCar.z };
+    if (s.type === 'race') return s.checkpoints[this.raceCp] || null;
+    if (s.type === 'eliminate') return { x: s.area.x, z: s.area.z };
     return null;
+  }
+
+  // Everything the HUD needs in one object.
+  status() {
+    const m = this.current;
+    const s = this.currentStage;
+    if (!m || !s) return { done: true, text: 'All jobs done' };
+    let text = s.name;
+    if (s.type === 'race') text += ` — CP ${this.raceCp}/${s.checkpoints.length} — ${this.timer.toFixed(1)}s`;
+    if (s.type === 'eliminate') text += ` — ${this.eliminated}/${s.count} down`;
+    if (s.type === 'escape') text += ' — stay clean until the stars fade';
+    return {
+      done: false,
+      missionName: m.name,
+      stage: this.stage + 1,
+      stageCount: m.stages.length,
+      stageName: s.name,
+      text,
+      target: this.targetPos(),
+    };
   }
 }

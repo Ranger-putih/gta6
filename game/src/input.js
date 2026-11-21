@@ -1,100 +1,136 @@
-// Keyboard and mouse input, kept in one place. The game reads this object
-// once a frame; edge-triggered presses (E, P, M, clicks) are consumed by the
-// frame that reads them, so holding a key never fires an action twice.
+// Keyboard and mouse for Vice Rush. The game reads held keys every frame
+// for movement, and edge-triggered actions (enter a car, confirm, pause)
+// through a small queue the world drains once per step. Dragging orbits
+// the camera, the wheel zooms it, left click punches, right click shoots.
 
-export class Input {
-  constructor(canvas) {
-    this.keys = new Set();
-    this.pressed = new Set();
-    // Accumulated mouse-drag orbit, in radians, since the last frame.
-    this.orbitX = 0;
-    this.orbitY = 0;
-    // Accumulated wheel zoom since the last frame.
-    this.wheel = 0;
-    // Mouse buttons pressed this frame: 0 = left, 2 = right.
-    this.clicks = new Set();
+export const ACTION_CONFIRM = 'confirm';
+export const ACTION_ENTER = 'enter';
+export const ACTION_PAUSE = 'pause';
+export const ACTION_MUTE = 'mute';
+export const ACTION_PUNCH = 'punch';
+export const ACTION_SHOOT = 'shoot';
+export const ACTION_WEAPON_1 = 'weapon1';
+export const ACTION_WEAPON_2 = 'weapon2';
+
+class Input {
+  constructor() {
+    this.held = new Set();
+    this.queue = [];
+    this.orbit = { x: 0, y: 0 };
+    this.camDist = 13;
     this.dragging = false;
     this.lastX = 0;
     this.lastY = 0;
-    this.canvas = canvas;
+    this.onPauseRequest = null;
+    this._bound = false;
+  }
 
-    window.addEventListener('keydown', (e) => {
-      if (e.repeat) return;
-      this.keys.add(e.code);
-      this.pressed.add(e.code);
-      // Space and arrows would scroll the page; the game owns them.
-      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
-        e.preventDefault();
-      }
+  bind(canvas) {
+    if (this._bound) return;
+    this._bound = true;
+    this.canvas = canvas || document;
+    window.addEventListener('keydown', (e) => this.onKeyDown(e));
+    window.addEventListener('keyup', (e) => this.onKeyUp(e));
+    window.addEventListener('blur', () => this.held.clear());
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && this.onPauseRequest) this.onPauseRequest();
     });
-    window.addEventListener('keyup', (e) => {
-      this.keys.delete(e.code);
-    });
-    window.addEventListener('blur', () => {
-      this.keys.clear();
-    });
+    const target = canvas || window;
+    target.addEventListener('mousedown', (e) => this.onMouseDown(e));
+    window.addEventListener('mouseup', (e) => this.onMouseUp(e));
+    window.addEventListener('mousemove', (e) => this.onMouseMove(e));
+    target.addEventListener('wheel', (e) => this.onWheel(e), { passive: true });
+    target.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
 
-    canvas.addEventListener('mousedown', (e) => {
+  onKeyDown(e) {
+    if (e.repeat) return;
+    this.held.add(e.code);
+    if (e.code === 'Space' || e.code === 'Enter') {
+      this.queue.push(ACTION_CONFIRM);
+      e.preventDefault();
+    } else if (e.code === 'KeyE') {
+      this.queue.push(ACTION_ENTER);
+    } else if (e.code === 'KeyP' || e.code === 'Escape') {
+      this.queue.push(ACTION_PAUSE);
+    } else if (e.code === 'KeyM') {
+      this.queue.push(ACTION_MUTE);
+    } else if (e.code === 'Digit1') {
+      this.queue.push(ACTION_WEAPON_1);
+    } else if (e.code === 'Digit2') {
+      this.queue.push(ACTION_WEAPON_2);
+    }
+  }
+
+  onKeyUp(e) {
+    this.held.delete(e.code);
+  }
+
+  onMouseDown(e) {
+    if (e.button === 0) {
       this.dragging = true;
       this.lastX = e.clientX;
       this.lastY = e.clientY;
-      this.clicks.add(e.button);
-      e.preventDefault();
-    });
-    window.addEventListener('mouseup', (e) => {
-      if (this.dragging && e.button === 0) this.dragging = false;
-      if (e.button === 2) this.dragging = false;
-    });
-    window.addEventListener('mousemove', (e) => {
-      if (!this.dragging) return;
-      this.orbitX += (e.clientX - this.lastX) * 0.005;
-      this.orbitY += (e.clientY - this.lastY) * 0.005;
-      this.lastX = e.clientX;
-      this.lastY = e.clientY;
-    });
-    canvas.addEventListener('wheel', (e) => {
-      this.wheel += e.deltaY;
-      e.preventDefault();
-    }, { passive: false });
-    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+      this.queue.push(ACTION_PUNCH);
+    } else if (e.button === 2) {
+      this.queue.push(ACTION_SHOOT);
+    }
+  }
+
+  onMouseUp(e) {
+    if (e.button === 0) this.dragging = false;
+  }
+
+  onMouseMove(e) {
+    if (!this.dragging) return;
+    const dx = e.clientX - this.lastX;
+    const dy = e.clientY - this.lastY;
+    this.lastX = e.clientX;
+    this.lastY = e.clientY;
+    // orbit.x is a turn rate applied while dragging; the world turns it
+    // into a camera heading. A big drag spins the view, a small one
+    // nudges it.
+    this.orbit.x += dx * 0.005;
+    this.orbit.y = Math.max(-0.5, Math.min(0.9, this.orbit.y + dy * 0.003));
+  }
+
+  onWheel(e) {
+    this.camDist = Math.max(7, Math.min(22, this.camDist + Math.sign(e.deltaY) * 1.5));
   }
 
   // True while the key is held down.
-  held(code) {
-    return this.keys.has(code);
+  isDown(code) {
+    return this.held.has(code);
   }
 
-  // True only on the frame the key went down (edge-triggered).
-  wasPressed(code) {
-    return this.pressed.has(code);
+  // Forward / strafe / run, in the game's own words.
+  get forward() {
+    return this.isDown('KeyW') || this.isDown('ArrowUp');
+  }
+  get back() {
+    return this.isDown('KeyS') || this.isDown('ArrowDown');
+  }
+  get left() {
+    return this.isDown('KeyA') || this.isDown('ArrowLeft');
+  }
+  get right() {
+    return this.isDown('KeyD') || this.isDown('ArrowRight');
+  }
+  get run() {
+    return this.isDown('ShiftLeft') || this.isDown('ShiftRight');
   }
 
-  // True only on the frame the mouse button went down.
-  wasClicked(button) {
-    return this.clicks.has(button);
+  // Drain the edge-triggered actions queued since the last step.
+  drain() {
+    const out = this.queue;
+    this.queue = [];
+    return out;
   }
 
-  // Forward / back / strafe from WASD or the arrow keys, each in -1..1.
-  moveAxes() {
-    let fwd = 0;
-    let strafe = 0;
-    if (this.held('KeyW') || this.held('ArrowUp')) fwd += 1;
-    if (this.held('KeyS') || this.held('ArrowDown')) fwd -= 1;
-    if (this.held('KeyD') || this.held('ArrowRight')) strafe += 1;
-    if (this.held('KeyA') || this.held('ArrowLeft')) strafe -= 1;
-    return { fwd, strafe };
-  }
-
-  running() {
-    return this.held('ShiftLeft') || this.held('ShiftRight');
-  }
-
-  // Call once per frame, after the game has read the inputs.
-  endFrame() {
-    this.pressed.clear();
-    this.clicks.clear();
-    this.orbitX = 0;
-    this.orbitY = 0;
-    this.wheel = 0;
+  clear() {
+    this.held.clear();
+    this.queue = [];
   }
 }
+
+export const input = new Input();

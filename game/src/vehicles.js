@@ -1,131 +1,147 @@
-// Cars: a mesh factory that builds a low-poly car from boxes, and the arcade
-// driving model every car in the game shares — the player's car, the traffic
-// and the police. Forward is (sin(heading), cos(heading)) on the ground.
+// Cars for Vice Rush. Every vehicle is a few boxes and cylinders, so the
+// whole fleet costs almost nothing to draw. A car is a model (its shape
+// and speed), a mesh, and a little physics: accelerate, brake, steer,
+// and slide along building walls instead of sinking into them.
+// Forward is (sin(heading), cos(heading)): heading PI faces north.
 
 import * as THREE from 'three';
-import { CONFIG } from './config.js';
-import { clamp, wrapAngle } from './random.js';
+import { CAR_MODELS } from './config.js';
 
-// Build a car mesh. `color` tints the body; `sport` adds a spoiler and
-// wider wheels. Returns a THREE.Group whose +z is the car's forward.
-export function makeCarMesh(color, sport = false) {
-  const group = new THREE.Group();
-  const paint = new THREE.MeshStandardMaterial({
-    color, roughness: 0.35, metalness: 0.55,
-  });
-  const glass = new THREE.MeshStandardMaterial({
-    color: 0x1a2733, roughness: 0.15, metalness: 0.7,
-  });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x1c1e22, roughness: 0.9 });
+function box(w, h, d, color, x, y, z, emissive) {
+  const mat = new THREE.MeshLambertMaterial({ color });
+  if (emissive) mat.emissive = new THREE.Color(emissive);
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y, z);
+  m.castShadow = false;
+  return m;
+}
 
-  // Body: a low slab, a cabin on top, a hood line.
-  const body = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.62, 4.4), paint);
-  body.position.y = 0.62;
-  body.castShadow = true;
-  group.add(body);
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.58, 2.1), glass);
-  cabin.position.set(0, 1.18, -0.25);
-  cabin.castShadow = true;
-  group.add(cabin);
-  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.14, 1.0), paint);
-  hood.position.set(0, 0.98, 1.55);
-  group.add(hood);
+function wheel(x, z) {
+  const m = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.36, 0.36, 0.28, 10),
+    new THREE.MeshLambertMaterial({ color: 0x111111 }),
+  );
+  m.rotation.z = Math.PI / 2;
+  m.position.set(x, 0.36, z);
+  return m;
+}
 
-  // Wheels.
-  const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.3, 12);
-  wheelGeo.rotateZ(Math.PI / 2);
-  for (const [wx, wz] of [[-0.95, 1.45], [0.95, 1.45], [-0.95, -1.45], [0.95, -1.45]]) {
-    const wheel = new THREE.Mesh(wheelGeo, dark);
-    wheel.position.set(wx, 0.36, wz);
-    wheel.castShadow = true;
-    group.add(wheel);
+// Build the visible mesh for a model. The sports car is long and low,
+// the van is a tall box, the pickup has an open bed, the taxi wears a
+// roof sign, the bike is a narrow frame with two wheels, and the police
+// cruiser carries a light bar.
+export function buildCarMesh(modelKey) {
+  const model = CAR_MODELS[modelKey] || CAR_MODELS.sedan;
+  const g = new THREE.Group();
+  const c = model.color;
+
+  if (modelKey === 'bike') {
+    g.add(box(0.5, 0.5, 1.9, c, 0, 0.75, 0));
+    g.add(box(0.4, 0.35, 0.5, 0x333333, 0, 1.05, -0.3));
+    const w1 = wheel(0, 0.75);
+    const w2 = wheel(0, -0.75);
+    w1.scale.set(1, 1, 0.6);
+    w2.scale.set(1, 1, 0.6);
+    g.add(w1, w2);
+    g.add(box(0.1, 0.1, 0.7, 0x888888, 0, 1.1, 0.6));
+    return g;
   }
 
-  // Headlights and taillights.
-  const lightMat = new THREE.MeshStandardMaterial({
-    color: 0xfff2c0, emissive: 0xffedb0, emissiveIntensity: 0.9,
-  });
-  for (const sx of [-0.65, 0.65]) {
-    const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.16, 0.08), lightMat);
-    lamp.position.set(sx, 0.72, 2.22);
-    group.add(lamp);
+  const long = modelKey === 'sports' ? 4.6 : modelKey === 'van' ? 4.4 : 4.2;
+  const wide = modelKey === 'van' ? 2.1 : 1.9;
+  const low = modelKey === 'sports' ? 0.55 : 0.75;
+  g.add(box(wide, low, long, c, 0, 0.65, 0));
+  if (modelKey === 'van') {
+    g.add(box(wide - 0.2, 0.9, long - 1.2, 0xdfe6ee, 0, 1.5, -0.2));
+  } else if (modelKey === 'pickup') {
+    g.add(box(wide - 0.2, 0.55, 1.6, 0x222222, 0, 0.95, -1.0));
+    g.add(box(wide - 0.3, 0.6, 1.2, c, 0, 1.15, 0.9));
+  } else {
+    g.add(box(wide - 0.3, 0.55, long * 0.45, 0x1a2a3a, 0, 1.15, -0.2));
   }
-  const tailMat = new THREE.MeshStandardMaterial({
-    color: 0x881111, emissive: 0xaa2222, emissiveIntensity: 0.7,
-  });
-  for (const sx of [-0.65, 0.65]) {
-    const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.14, 0.08), tailMat);
-    lamp.position.set(sx, 0.72, -2.22);
-    group.add(lamp);
+  if (modelKey === 'taxi') {
+    g.add(box(0.7, 0.18, 0.4, 0xffd400, 0, 1.55, -0.2, 0x664400));
+  }
+  if (modelKey === 'police') {
+    g.add(box(1.2, 0.14, 0.5, 0xffffff, 0, 1.5, -0.2));
+    g.add(box(0.5, 0.12, 0.3, 0xff2222, -0.35, 1.62, -0.2, 0xff2222));
+    g.add(box(0.5, 0.12, 0.3, 0x2244ff, 0.35, 1.62, -0.2, 0x2244ff));
+  }
+  g.add(box(0.3, 0.18, 0.1, 0xfff2b0, -0.6, 0.7, long / 2, 0xaa8800));
+  g.add(box(0.3, 0.18, 0.1, 0xfff2b0, 0.6, 0.7, long / 2, 0xaa8800));
+  g.add(box(0.25, 0.15, 0.08, 0xff2222, -0.6, 0.7, -long / 2, 0x550000));
+  g.add(box(0.25, 0.15, 0.08, 0xff2222, 0.6, 0.7, -long / 2, 0x550000));
+  g.add(wheel(-wide / 2, long * 0.32));
+  g.add(wheel(wide / 2, long * 0.32));
+  g.add(wheel(-wide / 2, -long * 0.32));
+  g.add(wheel(wide / 2, -long * 0.32));
+  return g;
+}
+
+export class Car {
+  constructor(modelKey, x, z, heading) {
+    this.modelKey = modelKey;
+    this.model = CAR_MODELS[modelKey] || CAR_MODELS.sedan;
+    this.x = x;
+    this.z = z;
+    this.heading = heading;
+    this.speed = 0;
+    this.health = 100;
+    this.parked = false;
+    this.traffic = false;
+    this.driver = null;
+    this.mesh = buildCarMesh(modelKey);
+    this.syncMesh();
   }
 
-  if (sport) {
-    // A rear spoiler and a lower, wider stance read as "sports car".
-    const wing = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.1, 0.5), dark);
-    wing.position.set(0, 1.15, -2.1);
-    group.add(wing);
-    for (const sx of [-0.8, 0.8]) {
-      const strut = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.35, 0.1), dark);
-      strut.position.set(sx, 0.95, -2.1);
-      group.add(strut);
+  get forwardX() {
+    return Math.sin(this.heading);
+  }
+  get forwardZ() {
+    return Math.cos(this.heading);
+  }
+
+  get condition() {
+    return Math.max(0, Math.round(this.health));
+  }
+
+  syncMesh() {
+    this.mesh.position.set(this.x, 0, this.z);
+    this.mesh.rotation.y = this.heading;
+  }
+
+  // One physics step. throttle in [-1, 1], steer in [-1, 1]. collide is
+  // a function (x, z, radius) that answers whether a spot is blocked.
+  drive(dt, throttle, steer, collide) {
+    const m = this.model;
+    if (throttle > 0) this.speed += m.accel * throttle * dt;
+    else if (throttle < 0) this.speed += (this.speed > 0.5 ? -30 : -8) * dt;
+    else this.speed -= Math.sign(this.speed) * Math.min(Math.abs(this.speed), 8 * dt);
+    if (this.speed > m.top) this.speed = m.top;
+    if (this.speed < -10) this.speed = -10;
+    // Steering bites less the faster the car goes.
+    const steerRate = 1.9 * m.grip * Math.max(0.35, 1 - Math.abs(this.speed) / (m.top * 1.6));
+    // D decreases the heading (the car veers east when facing north).
+    this.heading -= steer * steerRate * dt * Math.sign(this.speed || 1);
+    const nx = this.x + this.forwardX * this.speed * dt;
+    const nz = this.z + this.forwardZ * this.speed * dt;
+    const r = this.modelKey === 'bike' ? 0.9 : 1.4;
+    if (collide && collide(nx, nz, r)) {
+      // A wall: stop, take a little damage, and slide along it.
+      if (Math.abs(this.speed) > 6) this.health = Math.max(0, this.health - Math.abs(this.speed) * 0.35);
+      this.speed *= 0.4;
+    } else {
+      this.x = nx;
+      this.z = nz;
     }
+    this.syncMesh();
   }
-  return group;
-}
 
-// One car in the world. `mesh` is its group; x/z/heading/speed are the sim.
-export function makeCar(mesh, x, z, heading) {
-  return {
-    mesh, x, z, heading, speed: 0,
-    // Steering angle the wheels are at (visual only, eased toward target).
-    steerVis: 0,
-  };
-}
-
-export function syncCarMesh(car) {
-  car.mesh.position.set(car.x, 0, car.z);
-  car.mesh.rotation.y = car.heading;
-}
-
-// Arcade driving: throttle in -1..1 (forward/back), steer in -1..1 (D is
-// positive: it decreases the heading, which turns the car toward +x when
-// heading is near PI). Speed eases toward its target with drag, and the
-// heading turns faster the faster the car goes. Returns the new speed.
-export function driveCar(car, dt, throttle, steer, colliders, resolveCircle) {
-  const cfg = CONFIG.cars;
-  let target = 0;
-  if (throttle > 0) target = cfg.maxSpeed * throttle;
-  else if (throttle < 0) target = cfg.maxReverse * throttle;
-  // Approach the target speed with acceleration, then drag.
-  const accel = throttle > 0 ? cfg.accel : throttle < 0 ? cfg.reverseAccel : cfg.brake;
-  const diff = target - car.speed;
-  const step = accel * dt;
-  car.speed += clamp(diff, -step, step);
-  car.speed *= (1 - cfg.drag * dt);
-  if (Math.abs(car.speed) < 0.05 && throttle === 0) car.speed = 0;
-
-  // Steering only bites while moving; it reverses when backing up.
-  const steerAmount = steer * cfg.steerRate * clamp(Math.abs(car.speed) / 12, 0, 1);
-  car.heading -= steerAmount * dt * Math.sign(car.speed || 1);
-  car.heading = wrapAngle(car.heading);
-
-  const fx = Math.sin(car.heading);
-  const fz = Math.cos(car.heading);
-  let nx = car.x + fx * car.speed * dt;
-  let nz = car.z + fz * car.speed * dt;
-  // Keep the car inside the world and out of buildings.
-  nx = clamp(nx, -CONFIG.world.half + 2, CONFIG.world.half + 44);
-  nz = clamp(nz, -CONFIG.world.half + 2, CONFIG.world.half + 2);
-  if (resolveCircle) {
-    const fixed = resolveCircle(nx, nz, 1.5);
-    // A hard stop on the wall: hitting a building kills the speed.
-    if (fixed.x !== nx || fixed.z !== nz) car.speed *= 0.3;
-    nx = fixed.x;
-    nz = fixed.z;
+  damage(amount) {
+    this.health = Math.max(0, this.health - amount);
   }
-  car.x = nx;
-  car.z = nz;
-  car.steerVis += (steer * 0.45 - car.steerVis) * Math.min(1, dt * 8);
-  syncCarMesh(car);
-  return car.speed;
+
+  repair() {
+    this.health = 100;
+  }
 }

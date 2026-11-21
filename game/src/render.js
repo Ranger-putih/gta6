@@ -1,107 +1,108 @@
-// The renderer: the WebGL canvas, the sunset lighting, the fog, and the
-// chase camera that follows the player. The camera eases toward its target
-// every frame and snaps instantly when asked (after a teleport, or when a
-// staged shot frames the scene).
+// Rendering for Vice Rush: the WebGL renderer, the chase camera, and
+// the day-night cycle. The camera sits behind the player and looks the
+// way the camera yaw points; it lerps, so it glides instead of
+// snapping, and a snap call puts it exactly where it belongs after a
+// teleport. The sun, the fog and the sky all lerp through keyframes as
+// the 24-hour clock turns, so sunset melts into night and back.
 
 import * as THREE from 'three';
-import { CONFIG } from './config.js';
+import { DAY_KEYS } from './config.js';
 
-export class Renderer {
-  constructor(canvas) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.15;
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+function hexLerp(a, b, t) {
+  const ca = new THREE.Color(a);
+  const cb = new THREE.Color(b);
+  return ca.lerp(cb, t);
+}
+
+export function dayColors(hour) {
+  const h = ((hour % 24) + 24) % 24;
+  let i = 0;
+  while (i < DAY_KEYS.length - 2 && DAY_KEYS[i + 1].h <= h) i++;
+  const a = DAY_KEYS[i];
+  const b = DAY_KEYS[i + 1];
+  const t = Math.max(0, Math.min(1, (h - a.h) / (b.h - a.h)));
+  return {
+    sun: hexLerp(a.sun, b.sun, t),
+    sunI: a.sunI + (b.sunI - a.sunI) * t,
+    fog: hexLerp(a.fog, b.fog, t),
+    sky: hexLerp(a.sky, b.sky, t),
+    hemi: hexLerp(a.hemi, b.hemi, t),
+  };
+}
+
+export class Render {
+  constructor(container) {
+    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    container.appendChild(this.renderer.domElement);
+    this.canvas = this.renderer.domElement;
 
     this.scene = new THREE.Scene();
-    // A warm dusk sky; the fog melts the far city into it.
-    this.scene.background = new THREE.Color(0xf2a35e);
-    this.scene.fog = new THREE.Fog(0xe89a5e, 120, 420);
+    this.scene.background = new THREE.Color(0x3a2530);
+    this.scene.fog = new THREE.Fog(0x6b4a52, 90, 420);
 
-    this.camera = new THREE.PerspectiveCamera(62, 1, 0.1, 900);
-    this.resize();
+    this.camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 900);
+    this.camera.position.set(10, 8, 44);
+    this.lookTarget = new THREE.Vector3(10, 2, 24);
 
-    // Sunset key light, low and warm, plus a cool fill from the sea side.
-    const sun = new THREE.DirectionalLight(0xffb36b, 2.4);
-    sun.position.set(-120, 90, -160);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -260;
-    sun.shadow.camera.right = 260;
-    sun.shadow.camera.top = 260;
-    sun.shadow.camera.bottom = -260;
-    sun.shadow.camera.far = 700;
-    sun.shadow.bias = -0.0004;
-    this.scene.add(sun);
-    this.scene.add(new THREE.HemisphereLight(0xffd9a0, 0x3a4a5a, 0.9));
-    const fill = new THREE.DirectionalLight(0x7fa8c9, 0.5);
-    fill.position.set(200, 60, 120);
-    this.scene.add(fill);
+    this.sun = new THREE.DirectionalLight(0xff7a2a, 0.9);
+    this.sun.position.set(120, 180, 60);
+    this.scene.add(this.sun);
+    this.hemi = new THREE.HemisphereLight(0x8a5a4a, 0x2a2018, 0.7);
+    this.scene.add(this.hemi);
+    this.ambient = new THREE.AmbientLight(0x404050, 0.5);
+    this.scene.add(this.ambient);
 
-    // The sun itself, a low disc over the sea.
-    const sunDisc = new THREE.Mesh(
-      new THREE.CircleGeometry(26, 32),
-      new THREE.MeshBasicMaterial({ color: 0xffe9a8, fog: false }),
-    );
-    sunDisc.position.set(330, 42, -40);
-    sunDisc.lookAt(0, 42, -40);
-    this.scene.add(sunDisc);
-
-    // Muzzle flash: a small point light that lives for a blink after a shot.
-    this.flash = new THREE.PointLight(0xffd27a, 0, 18);
-    this.scene.add(this.flash);
-
-    // Camera orbit state: yaw around the player and pitch above them.
-    this.orbitYaw = 0;
-    this.orbitPitch = 0.32;
-    this.camPos = new THREE.Vector3(0, 20, -30);
-    this.lookAt = new THREE.Vector3(0, 0, 0);
+    window.addEventListener('resize', () => {
+      this.camera.aspect = window.innerWidth / window.innerHeight;
+      this.camera.updateProjectionMatrix();
+      this.renderer.setSize(window.innerWidth, window.innerHeight);
+    });
   }
 
-  resize() {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    this.renderer.setSize(w, h, false);
-    this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
+  // Recolour the light, fog and sky for the hour. Called every frame;
+  // the lerp is cheap and the change is gradual.
+  updateDayNight(hour) {
+    const c = dayColors(hour);
+    this.sun.color.copy(c.sun);
+    this.sun.intensity = c.sunI;
+    this.scene.fog.color.copy(c.fog);
+    this.scene.background.copy(c.sky);
+    this.hemi.color.copy(c.hemi);
+    // The sun swings low at dusk and high at noon.
+    const angle = ((hour - 6) / 12) * Math.PI;
+    this.sun.position.set(Math.cos(angle) * 160, Math.sin(angle) * 160 + 30, 80);
   }
 
-  // Place the camera behind the target (player or car) at the current orbit.
-  // `snap` jumps straight there instead of easing (teleports, shot framing).
-  follow(dt, targetX, targetZ, targetHeading, snap = false) {
-    const cfg = CONFIG.camera;
-    const dist = cfg.distance;
-    // The camera sits behind the target, opposite its heading, plus the
-    // user's orbit yaw. Pitch lifts it above the ground.
-    const yaw = targetHeading + Math.PI + this.orbitYaw;
-    const px = targetX + Math.sin(yaw) * Math.cos(this.orbitPitch) * dist;
-    const pz = targetZ + Math.cos(yaw) * Math.cos(this.orbitPitch) * dist;
-    const py = cfg.height + Math.sin(this.orbitPitch) * dist;
-    const k = snap ? 1 : 1 - Math.exp(-cfg.followLerp * dt);
-    this.camPos.x += (px - this.camPos.x) * k;
-    this.camPos.y += (py - this.camPos.y) * k;
-    this.camPos.z += (pz - this.camPos.z) * k;
-    // Look slightly ahead of the target, at chest height.
-    const lx = targetX + Math.sin(targetHeading) * 3;
-    const lz = targetZ + Math.cos(targetHeading) * 3;
-    this.lookAt.x += (lx - this.lookAt.x) * k;
-    this.lookAt.y += (1.6 - this.lookAt.y) * k;
-    this.lookAt.z += (lz - this.lookAt.z) * k;
-    this.camera.position.copy(this.camPos);
-    this.camera.lookAt(this.lookAt);
+  // Chase camera. camYaw is the direction the camera looks; the camera
+  // sits behind the player by camDist and a little above. snap=true
+  // puts it there at once (after a teleport).
+  follow(world, dt, snap) {
+    const p = world.player;
+    const yaw = world.camYaw;
+    const dist = world.camDist;
+    const height = 4.5 + world.camPitch * 4 + (p.onFoot ? 0 : 1.2);
+    const bx = Math.sin(yaw);
+    const bz = Math.cos(yaw);
+    const cx = p.x - bx * dist;
+    const cz = p.z - bz * dist;
+    const k = snap ? 1 : 1 - Math.exp(-7 * dt);
+    const lk = snap ? 1 : 1 - Math.exp(-10 * dt);
+    this.camera.position.x += (cx - this.camera.position.x) * k;
+    this.camera.position.y += (height - this.camera.position.y) * k;
+    this.camera.position.z += (cz - this.camera.position.z) * k;
+    const tx = p.x + bx * 4;
+    const ty = p.onFoot ? 1.6 : 1.8;
+    const tz = p.z + bz * 4;
+    this.lookTarget.x += (tx - this.lookTarget.x) * lk;
+    this.lookTarget.y += (ty - this.lookTarget.y) * lk;
+    this.lookTarget.z += (tz - this.lookTarget.z) * lk;
+    this.camera.lookAt(this.lookTarget);
   }
 
-  // A snap-to after a teleport: one call with dt=10 settles instantly.
-  snapTo(targetX, targetZ, targetHeading) {
-    this.follow(10, targetX, targetZ, targetHeading, true);
-  }
-
-  setFlash(x, z, on) {
-    this.flash.position.set(x, 2, z);
-    this.flash.intensity = on ? 60 : 0;
+  snapCamera(world) {
+    this.follow(world, 10, true);
   }
 
   render() {

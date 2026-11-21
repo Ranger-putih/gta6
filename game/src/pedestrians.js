@@ -1,157 +1,162 @@
-// Pedestrians: people walking the sidewalks. Each one strolls along a
-// sidewalk edge, turns around at the end of a block, and wanders to the next
-// block now and then. They are simple capsule figures in bright clothes, and
-// they scatter (run away from) a car that comes at them fast.
+// Pedestrians for Vice Rush. Thirty walkers stroll the roads and the
+// beach, turning at crossings, keeping the city feeling inhabited. A
+// car that hits one earns a wanted star. The Night Market gang is a
+// separate, stationary breed: five members who stand their ground until
+// the player takes them out.
 
 import * as THREE from 'three';
-import { CONFIG } from './config.js';
-import { range, pick, dist2d } from './random.js';
+import { ROADS, CITY_HALF, GANG_SPAWNS } from './config.js';
+import { rng } from './random.js';
 
-const SHIRTS = [0xd95f4b, 0x4b7fd9, 0x5fb84b, 0xd9b84b, 0x9b4bd9, 0x4bd9c9, 0xe8e8e8, 0x2e2e2e];
-const PANTS = [0x2e3a4a, 0x4a2e2e, 0x3a4a2e, 0x2e2e2e];
+const SHIRTS = [0xd94f4f, 0x4f9fd9, 0x7ac74f, 0xd9a441, 0x9b59b6, 0xe8e8e8, 0x2a2a2a, 0xe07840];
+const SKINS = [0xe8b88a, 0xc98a5e, 0x8a5a3a, 0xf0c8a0];
+
+function buildPersonMesh(shirt, skin, gang) {
+  const g = new THREE.Group();
+  const bodyMat = new THREE.MeshLambertMaterial({ color: shirt });
+  const skinMat = new THREE.MeshLambertMaterial({ color: skin });
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.34, 0.95, 8), bodyMat);
+  body.position.y = 0.85;
+  g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.26, 10, 8), skinMat);
+  head.position.y = 1.55;
+  g.add(head);
+  const legMat = new THREE.MeshLambertMaterial({ color: 0x2a2a3a });
+  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.5, 0.16), legMat);
+  legL.position.set(-0.14, 0.25, 0);
+  const legR = legL.clone();
+  legR.position.x = 0.14;
+  g.add(legL, legR);
+  if (gang) {
+    // A red bandana and a darker jacket mark the gang.
+    const band = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.1, 0.56), new THREE.MeshLambertMaterial({ color: 0xaa1111 }));
+    band.position.y = 1.68;
+    g.add(band);
+  }
+  return g;
+}
 
 export class Pedestrians {
-  constructor(scene, rng) {
+  constructor(scene, collide) {
     this.scene = scene;
-    this.rng = rng;
+    this.collide = collide;
     this.walkers = [];
-    const roads = CONFIG.world.roads;
-    for (let i = 0; i < CONFIG.pedestrians.count; i += 1) {
-      // Pick a sidewalk: just off a road, on a block edge.
-      const road = pick(rng, roads);
-      const alongX = rng() < 0.5;
-      const side = rng() < 0.5 ? -1 : 1;
-      const t = range(rng, -170, 170);
-      const x = alongX ? t : road + side * 8;
-      const z = alongX ? road + side * 8 : t;
-      const mesh = this.makeWalkerMesh();
-      mesh.position.set(x, 0, z);
-      scene.add(mesh);
-      this.walkers.push({
-        mesh, x, z,
-        heading: alongX ? (rng() < 0.5 ? Math.PI / 2 : -Math.PI / 2) : (rng() < 0.5 ? 0 : Math.PI),
-        speed: range(rng, 1.2, CONFIG.pedestrians.walkSpeed),
-        alongX,
-        road,
-        side,
-        // A walker that was hit staggers and then falls.
-        health: CONFIG.combat.pedHealth,
-        down: false,
-        downTimer: 0,
-        flee: 0,
-        // Walk-cycle phase, advanced by dt so the bob is deterministic.
-        phase: range(rng, 0, Math.PI * 2),
-      });
+    this.gang = [];
+  }
+
+  spawn(count) {
+    for (let i = 0; i < count; i++) {
+      this.addWalker();
     }
   }
 
-  makeWalkerMesh() {
-    const group = new THREE.Group();
-    const shirt = new THREE.MeshStandardMaterial({ color: pick(this.rng, SHIRTS), roughness: 0.9 });
-    const pants = new THREE.MeshStandardMaterial({ color: pick(this.rng, PANTS), roughness: 0.9 });
-    const skin = new THREE.MeshStandardMaterial({ color: 0xd9a077, roughness: 0.8 });
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.32, 0.85, 8), shirt);
-    body.position.y = 0.95;
-    body.castShadow = true;
-    group.add(body);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 10), skin);
-    head.position.y = 1.62;
-    head.castShadow = true;
-    group.add(head);
-    for (const sx of [-0.13, 0.13]) {
-      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 0.55, 6), pants);
-      leg.position.set(sx, 0.28, 0);
-      group.add(leg);
-    }
-    return group;
+  addWalker(x, z, heading) {
+    const vertical = rng.chance(0.5);
+    const road = rng.pick(ROADS);
+    const along = rng.range(-CITY_HALF + 10, CITY_HALF - 10);
+    const px = x !== undefined ? x : vertical ? road + rng.range(-4, 4) : along;
+    const pz = z !== undefined ? z : vertical ? along : road + rng.range(-4, 4);
+    const h = heading !== undefined ? heading : rng.range(0, Math.PI * 2);
+    const w = {
+      x: px, z: pz, heading: h, speed: rng.range(1.0, 2.0),
+      mesh: buildPersonMesh(rng.pick(SHIRTS), rng.pick(SKINS), false),
+      alive: true, fallTimer: 0,
+    };
+    w.mesh.position.set(px, 0, pz);
+    w.mesh.rotation.y = h;
+    this.walkers.push(w);
+    this.scene.add(w.mesh);
+    return w;
   }
 
-  update(dt, cars) {
+  // The Night Market gang: five members standing on the roads around
+  // the market, each on open ground, none inside a building.
+  spawnGang() {
+    this.clearGang();
+    for (const s of GANG_SPAWNS) {
+      const m = {
+        x: s.x, z: s.z, heading: rng.range(0, Math.PI * 2),
+        mesh: buildPersonMesh(0x5a1a1a, rng.pick(SKINS), true),
+        alive: true, fallTimer: 0,
+      };
+      m.mesh.position.set(s.x, 0, s.z);
+      m.mesh.rotation.y = m.heading;
+      this.gang.push(m);
+      this.scene.add(m.mesh);
+    }
+    return this.gang;
+  }
+
+  clearGang() {
+    for (const m of this.gang) this.scene.remove(m.mesh);
+    this.gang = [];
+  }
+
+  get gangAlive() {
+    return this.gang.filter((m) => m.alive).length;
+  }
+
+  // Take a gang member out. Returns true if it was a live gang member.
+  eliminate(person) {
+    if (!person || !person.alive) return false;
+    person.alive = false;
+    person.fallTimer = 2.5;
+    person.mesh.rotation.x = -Math.PI / 2;
+    person.mesh.position.y = 0.3;
+    return this.gang.includes(person);
+  }
+
+  // Mark a walker as down. The world or combat decides why.
+  knockDown(w) {
+    if (!w.alive) return;
+    w.alive = false;
+    w.fallTimer = 2.5;
+    w.mesh.rotation.x = -Math.PI / 2;
+    w.mesh.position.y = 0.3;
+  }
+
+  update(dt) {
+    const toRespawn = [];
     for (const w of this.walkers) {
-      if (w.down) {
-        w.downTimer -= dt;
-        // Lie flat for a while, then get back up and walk on.
-        w.mesh.rotation.x = -Math.PI / 2 + Math.min(1, (3 - w.downTimer) / 3) * 0;
-        w.mesh.position.y = 0.3;
-        if (w.downTimer <= 0) {
-          w.down = false;
-          w.health = CONFIG.combat.pedHealth;
-          w.mesh.rotation.x = 0;
-          w.mesh.position.y = 0;
-        }
+      if (!w.alive) {
+        w.fallTimer -= dt;
+        if (w.fallTimer <= 0) toRespawn.push(w);
         continue;
       }
-      // Flee a fast car that is close: run away from it.
-      let speed = w.speed;
-      if (cars) {
-        for (const c of cars) {
-          const d = dist2d(w.x, w.z, c.x, c.z);
-          if (d < 7 && Math.abs(c.speed) > 8) {
-            w.flee = 1.2;
-            w.heading = Math.atan2(w.x - c.x, w.z - c.z);
-          }
-        }
+      // Walk along the current heading; at a crossing, sometimes turn.
+      const onCrossing = ROADS.some((c) => Math.abs(w.x - c) < 3 || Math.abs(w.z - c) < 3);
+      if (onCrossing && rng.chance(dt * 0.2)) {
+        w.heading += (rng.chance(0.5) ? 1 : -1) * Math.PI / 2;
       }
-      if (w.flee > 0) {
-        w.flee -= dt;
-        speed = w.speed * 2.6;
-      }
-      // Stroll along the sidewalk; turn at the block's end.
-      const fx = Math.sin(w.heading);
-      const fz = Math.cos(w.heading);
-      w.x += fx * speed * dt;
-      w.z += fz * speed * dt;
-      const pos = w.alongX ? w.x : w.z;
-      if (pos > 185 || pos < -185) {
-        w.heading += Math.PI;
-        w.x = Math.max(-185, Math.min(185, w.x));
-        w.z = Math.max(-185, Math.min(185, w.z));
-      }
-      // A small chance to turn onto a crossing sidewalk.
-      if (this.rng() < dt * 0.05) {
-        const roads = CONFIG.world.roads;
-        const cross = w.alongX ? w.z : w.x;
-        let nearest = roads[0];
-        for (const r of roads) {
-          if (Math.abs(r - cross) < Math.abs(nearest - cross)) nearest = r;
-        }
-        if (Math.abs(cross - nearest) < 10) {
-          if (w.alongX) {
-            w.z = nearest + w.side * 8;
-            w.alongX = false;
-            w.heading = this.rng() < 0.5 ? 0 : Math.PI;
-          } else {
-            w.x = nearest + w.side * 8;
-            w.alongX = true;
-            w.heading = this.rng() < 0.5 ? Math.PI / 2 : -Math.PI / 2;
-          }
-        }
+      const nx = w.x + Math.sin(w.heading) * w.speed * dt;
+      const nz = w.z + Math.cos(w.heading) * w.speed * dt;
+      if (Math.abs(nx) < CITY_HALF && Math.abs(nz) < CITY_HALF && !this.collide(nx, nz, 0.5)) {
+        w.x = nx;
+        w.z = nz;
+      } else {
+        w.heading += Math.PI / 2;
       }
       w.mesh.position.set(w.x, 0, w.z);
       w.mesh.rotation.y = w.heading;
-      // A simple walk bob, driven by the walk phase so it is deterministic.
-      w.phase += dt * speed * 2.2;
-      w.mesh.position.y = Math.abs(Math.sin(w.phase)) * 0.04;
+      // A little leg swing so they read as walking.
+      const swing = Math.sin(performance.now() * 0.008 + w.x * 3) * 0.12;
+      const legs = w.mesh.children.slice(2, 4);
+      if (legs[0]) legs[0].position.z = swing;
+      if (legs[1]) legs[1].position.z = -swing;
     }
-  }
-
-  // Hurt a walker at (x, z) within `radius`; returns the walker hit, if any.
-  hurtAt(x, z, radius, damage) {
-    for (const w of this.walkers) {
-      if (w.down) continue;
-      if (dist2d(w.x, w.z, x, z) < radius) {
-        w.health -= damage;
-        if (w.health <= 0) {
-          w.down = true;
-          w.downTimer = 3;
-        }
-        return w;
+    // Fallen walkers get back on their feet somewhere else in the city.
+    for (const w of toRespawn) {
+      const idx = this.walkers.indexOf(w);
+      if (idx !== -1) this.walkers.splice(idx, 1);
+      this.scene.remove(w.mesh);
+      this.addWalker();
+    }
+    // Fallen gang members fade out after a couple of seconds.
+    for (const m of this.gang) {
+      if (!m.alive && m.fallTimer > 0) {
+        m.fallTimer -= dt;
+        if (m.fallTimer <= 0) this.scene.remove(m.mesh);
       }
     }
-    return null;
-  }
-
-  dots() {
-    return this.walkers.filter((w) => !w.down).map((w) => ({ x: w.x, z: w.z }));
   }
 }

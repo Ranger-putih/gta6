@@ -1,9 +1,9 @@
-// A tiny seeded random generator, so the city, the traffic and the walkers
-// are the same on every load with the same seed. Nothing here touches
-// Math.random, which would make two runs differ.
+// Seeded random numbers for Vice Rush. The city layout and the staged
+// screenshots use fixed seeds so the same seed always builds the same
+// streets; live play uses a seed from the clock so no two drives feel
+// identical. mulberry32 is tiny, fast, and good enough for a game.
 
-// Mulberry32: a small, fast generator with a good spread for a game.
-export function createRng(seed) {
+export function mulberry32(seed) {
   let a = seed >>> 0;
   return function next() {
     a |= 0;
@@ -14,53 +14,49 @@ export function createRng(seed) {
   };
 }
 
-// A float in [min, max).
-export function range(rng, min, max) {
-  return min + rng() * (max - min);
-}
-
-// A whole number in [min, max].
-export function rangeInt(rng, min, max) {
-  return Math.floor(range(rng, min, max + 1));
-}
-
-// One element of an array, picked uniformly.
-export function pick(rng, items) {
-  return items[Math.floor(rng() * items.length)];
-}
-
-// A shuffled copy of an array (Fisher-Yates, driven by the seeded rng).
-export function shuffled(rng, items) {
-  const copy = items.slice();
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(rng() * (i + 1));
-    const tmp = copy[i];
-    copy[i] = copy[j];
-    copy[j] = tmp;
+export class Rng {
+  constructor(seed) {
+    this.next = mulberry32(seed);
   }
-  return copy;
+  // Float in [0, 1).
+  float() {
+    return this.next();
+  }
+  // Float in [a, b).
+  range(a, b) {
+    return a + (b - a) * this.next();
+  }
+  // Integer in [a, b] inclusive.
+  int(a, b) {
+    return a + Math.floor(this.next() * (b - a + 1));
+  }
+  // True with probability p.
+  chance(p) {
+    return this.next() < p;
+  }
+  // One element of an array.
+  pick(list) {
+    return list[Math.floor(this.next() * list.length)];
+  }
+  // A shuffled copy of an array.
+  shuffled(list) {
+    const out = list.slice();
+    for (let i = out.length - 1; i > 0; i--) {
+      const j = Math.floor(this.next() * (i + 1));
+      const tmp = out[i];
+      out[i] = out[j];
+      out[j] = tmp;
+    }
+    return out;
+  }
 }
 
-// Clamp a value into [min, max].
-export function clamp(v, min, max) {
-  return v < min ? min : v > max ? max : v;
-}
+// The shared live-play generator. Its seed comes from the clock, so each
+// session shuffles traffic colours, pedestrian looks and spawn spots.
+export const rng = new Rng((Date.now() % 2147483647) | 1);
 
-// Wrap an angle into (-PI, PI].
-export function wrapAngle(a) {
-  while (a > Math.PI) a -= Math.PI * 2;
-  while (a <= -Math.PI) a += Math.PI * 2;
-  return a;
-}
-
-// The shortest signed turn from angle `from` to angle `to`.
-export function angleTo(from, to) {
-  return wrapAngle(to - from);
-}
-
-// Straight-line distance on the ground plane.
-export function dist2d(ax, az, bx, bz) {
-  const dx = ax - bx;
-  const dz = az - bz;
-  return Math.sqrt(dx * dx + dz * dz);
+// A fixed generator for anything that must be identical every run, like
+// the city blocks and the staged screenshot scenes.
+export function fixedRng(seed) {
+  return new Rng(seed);
 }

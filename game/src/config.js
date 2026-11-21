@@ -1,61 +1,97 @@
-// Every tuning number and colour in one place. The playfield is a fixed 1280x720 logical area;
-// the renderer scales it to the window, so no rule below depends on the screen size.
-
-export const FIELD = { width: 1280, height: 720, groundY: 664 };
-
-/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
+// Vice Rush — every tuning number, colour and mission in one place.
+// The city is a road grid: roads run at the centres listed in CITY.roads,
+// blocks sit between them. East of x = beachX is sand, then the sea.
 export const STEP = 1 / 60;
 
-export const PLAYER = {
-  width: 72,
-  height: 24,
-  speed: 560,
-  invulnerable: 1.5,
+/** Where the save (money, missions, best) is kept between visits. */
+export const SAVE_KEY = 'vice-rush.save.v1';
+
+export const CITY = {
+  pitch: 80,
+  road: 16,
+  roads: [-160, -80, 0, 80, 160],
+  half: 200,
+  beachX: 200,
+  sandEnd: 238,
+  seaX: 238,
+  groundMinX: -320,
+  groundMaxX: 460,
+  groundMinZ: -320,
+  groundMaxZ: 320,
 };
-
-export const LIVES = 3;
-
-export const BLOCK = {
-  minWidth: 40,
-  maxWidth: 110,
-  height: 36,
-  speed: 240,
-  speedPerLevel: 30,
-  speedJitter: 90,
-  interval: 0.55,
-  intervalScale: 0.88,
-  minInterval: 0.14,
-  dodgePoints: 1,
-};
-
-export const COIN = {
-  size: 24,
-  speed: 190,
-  speedPerLevel: 14,
-  interval: 1.4,
-  intervalJitter: 0.8,
-  points: 10,
-};
-
-/** Seconds of play per level, and the last level: speeds and spawn rates stop growing there. */
-export const LEVEL = { seconds: 12, max: 12 };
-
-/** How many falling things can exist at once; the pool is allocated once, at boot. */
-export const POOL_SIZE = 64;
 
 export const PALETTE = {
-  backdrop: '#11141b',
-  sky: '#1b1f2a',
-  ground: '#2a3040',
-  player: '#4fc3f7',
-  block: '#e5534b',
-  coin: '#f2c94c',
-  panel: '#252b38',
-  text: '#eef1f5',
-  muted: '#8b93a3',
+  sky: 0xff9e57,
+  fog: 0xdd875f,
+  ground: 0x3a3f4a,
+  road: 0x2e323d,
+  sidewalk: 0x8d8578,
+  sand: 0xe8cf9a,
+  sea: 0x1f6f8b,
+  building: [0xf2d8a7, 0xe8b48c, 0xc9d6df, 0xf6e3c5, 0xd9a441, 0x9fb8c8, 0xe07856, 0x7fb069],
+  windowLit: 0xffd27a,
+  windowDark: 0x2c3550,
+  palm: 0x2e7d4f,
+  trunk: 0x7a5230,
+  lamp: 0xffe9a8,
+  player: 0x4fc3f7,
+  police: 0x2b4acb,
+  taxi: 0xf2c94c,
 };
 
-export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+export const TUNE = {
+  walkSpeed: 6,
+  runSpeed: 10.5,
+  playerRadius: 0.7,
+  carRadius: 2.3,
+  carAccel: 17,
+  carBrake: 30,
+  carReverse: 11,
+  carMax: 40,
+  sportsMax: 50,
+  steerRate: 2.0,
+  wantedDecaySeconds: 26,
+  policeRamDamage: 9,
+  policeShootDamage: 4,
+  punchDamage: 25,
+  gunDamage: 40,
+  gunRange: 60,
+  bustSeconds: 2.5,
+  healthRegen: 2.5,
+};
 
-/** Where the best score is kept between visits (this browser only). */
-export const BEST_KEY = 'block-dodger.best';
+/** The story, in three jobs for Raka, new in town and working for Mira. */
+export const MISSIONS = [
+  {
+    id: 'package',
+    title: 'Package for Mira',
+    brief: 'Mira needs a package at the Beach Cafe. Reach the yellow marker and press E.',
+    target: { x: 208, z: -40 },
+    radius: 5,
+    reward: 300,
+    type: 'reach',
+  },
+  {
+    id: 'steal',
+    title: "Dito's Ride",
+    brief: 'Steal the yellow sports car at the north lot, then bring it to the garage marker. The cops will notice.',
+    target: { x: -80, z: -168 },
+    garage: { x: -168, z: 168 },
+    radius: 6,
+    reward: 500,
+    type: 'steal-deliver',
+  },
+  {
+    id: 'escape',
+    title: 'Lose the Heat',
+    brief: 'Raise your wanted level to 3 stars, then lose the cops until it drops back to zero.',
+    target: null,
+    radius: 0,
+    reward: 400,
+    type: 'escape',
+  },
+];
+
+export const PLAYER_START = { x: 10, z: 24, heading: Math.PI };
+
+export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';

@@ -3,17 +3,82 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Block Dodger</title>
+<title>Vice Rush — Sunset Bay</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #11141b; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1f2a; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
   #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  /* Read aloud, never shown: the status line screen readers announce. */
   #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  #hud { position: fixed; inset: 0; pointer-events: none; color: #eef1f5; display: none; }
+  .panel { position: absolute; background: rgba(16, 19, 26, 0.72); border-radius: 10px; padding: 10px 14px; }
+  #topleft { top: 14px; left: 14px; min-width: 200px; }
+  #money { font-size: 26px; font-weight: 700; color: #7ddb8a; }
+  #stars { font-size: 22px; letter-spacing: 2px; margin-top: 2px; }
+  #healthbar { margin-top: 8px; width: 180px; height: 10px; background: rgba(255,255,255,0.18); border-radius: 5px; overflow: hidden; }
+  #health-fill { height: 100%; width: 100%; background: #58c96b; border-radius: 5px; }
+  #topright { top: 14px; right: 14px; padding: 6px; }
+  #minimap { display: block; width: 180px; height: 180px; border-radius: 6px; }
+  #bottomcenter { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); text-align: center; width: min(720px, 90vw); }
+  #objective { font-size: 17px; font-weight: 600; text-shadow: 0 1px 4px #000; }
+  #messages { margin-top: 8px; font-size: 14px; }
+  #messages .message { background: rgba(16, 19, 26, 0.72); border-radius: 8px; padding: 6px 10px; margin-top: 4px; display: inline-block; }
+  #prompt { position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); font-size: 16px; font-weight: 600; background: rgba(16, 19, 26, 0.8); border-radius: 8px; padding: 8px 14px; display: none; }
+  #speed { position: absolute; right: 18px; bottom: 16px; font-size: 26px; font-weight: 700; text-shadow: 0 1px 4px #000; }
+  #crosshair { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; background: rgba(255,255,255,0.85); box-shadow: 0 0 4px #000; }
+  #damage { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 55%, rgba(229, 83, 75, 0.9) 100%); opacity: 0; transition: opacity 0.25s; }
+  .screen { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; text-align: center; color: #eef1f5; background: linear-gradient(180deg, rgba(20, 16, 40, 0.55), rgba(60, 20, 10, 0.65)); }
+  .screen h1 { font-size: 64px; margin: 0; letter-spacing: 4px; color: #ffd23e; text-shadow: 0 3px 0 #e07856, 0 6px 18px rgba(0,0,0,0.7); }
+  .screen h2 { font-size: 22px; margin: 8px 0 0; font-weight: 400; color: #ffd9b0; }
+  .screen p { max-width: 560px; font-size: 16px; line-height: 1.5; margin: 14px 0 0; }
+  .screen .controls { margin-top: 18px; font-size: 14px; color: #c8cfdb; line-height: 1.8; }
+  .screen .prompt { margin-top: 22px; font-size: 18px; font-weight: 700; color: #7ddb8a; animation: pulse 1.4s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+  #title-stats { margin-top: 14px; font-size: 14px; color: #c8cfdb; }
+  #screen-pause, #screen-over { display: none; }
 </style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.min.js" } }
+</script>
 </head>
 <body>
-<canvas id="game" aria-label="Block Dodger: move the paddle left and right to dodge falling blocks and catch coins"></canvas>
+<canvas id="game" aria-label="Vice Rush: an open-world crime game in Sunset Bay"></canvas>
 <p id="status" role="status" aria-live="polite"></p>
+<div id="damage"></div>
+<div id="hud">
+  <div class="panel" id="topleft">
+    <div id="money">$150</div>
+    <div id="stars">☆☆☆☆☆</div>
+    <div id="healthbar"><div id="health-fill"></div></div>
+  </div>
+  <div class="panel" id="topright"><canvas id="minimap" width="180" height="180"></canvas></div>
+  <div id="bottomcenter">
+    <div id="objective"></div>
+    <div id="messages"></div>
+  </div>
+  <div id="prompt"></div>
+  <div id="speed"></div>
+  <div id="crosshair"></div>
+</div>
+<div class="screen" id="screen-title">
+  <h1>VICE RUSH</h1>
+  <h2>Sunset Bay — an open-world crime game</h2>
+  <p>Raka just got off the bus in Sunset Bay with $150 and a phone number: Mira, the fixer who runs this town. Do her jobs, stay ahead of the cops, and make the city yours.</p>
+  <div class="controls">
+    WASD — move / drive &nbsp;·&nbsp; Shift — run &nbsp;·&nbsp; E — enter / exit car &nbsp;·&nbsp; Click — punch &nbsp;·&nbsp; Right-click — shoot<br>
+    Drag mouse — orbit camera &nbsp;·&nbsp; Wheel — zoom &nbsp;·&nbsp; P — pause &nbsp;·&nbsp; M — mute
+  </div>
+  <div id="title-stats"></div>
+  <div class="prompt">Click or press Space to start</div>
+</div>
+<div class="screen" id="screen-pause">
+  <h1>PAUSED</h1>
+  <p>The city waits for you.</p>
+  <div class="prompt">Press P to resume</div>
+</div>
+<div class="screen" id="screen-over">
+  <h1 id="over-title">BUSTED</h1>
+  <p id="over-text"></p>
+  <div class="prompt">Press Space to try again</div>
+</div>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>

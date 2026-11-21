@@ -1,111 +1,120 @@
-// Combat: a punch for close quarters and a pistol for distance. A punch
-// knocks a pedestrian down; a shot can drop one or disable a car (which
-// starts smoking). Both raise the wanted level — the world applies that.
-import * as THREE from 'three';
-import { TUNE } from './config.js';
+// Combat: a punch up close and a shot from a distance. Both are simple
+// ground-plane tests (no raycaster): the punch hits the nearest person in
+// front of the player, the shot hits the first person or car along the aim
+// line. Hitting anyone raises the wanted level, because that is what a
+// crime is.
 
-function angleDiff(a, b) {
-  let d = a - b;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
-  return d;
-}
+import { CONFIG } from './config.js';
+import { dist2d, angleTo } from './random.js';
 
-export function createCombat(scene) {
-  const tracerGeo = new THREE.BufferGeometry();
-  const tracerMat = new THREE.LineBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0 });
-  const tracer = new THREE.Line(tracerGeo, tracerMat);
-  tracer.frustumCulled = false;
-  scene.add(tracer);
-  let tracerTtl = 0;
-  let punchCooldown = 0;
-  let shootCooldown = 0;
-  const smokes = [];
-
-  function addSmoke(car) {
-    const smoke = new THREE.Mesh(
-      new THREE.SphereGeometry(1.2, 8, 6),
-      new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.6 }),
-    );
-    smoke.position.set(car.x, 1.6, car.z);
-    scene.add(smoke);
-    smokes.push({ mesh: smoke, car, t: 0 });
+export class Combat {
+  constructor() {
+    this.punchTimer = 0;
+    this.shootTimer = 0;
+    // A muzzle flash the renderer draws for a blink after a shot.
+    this.flashTimer = 0;
+    this.flashAt = { x: 0, z: 0 };
   }
 
-  return {
-    update(dt) {
-      punchCooldown = Math.max(0, punchCooldown - dt);
-      shootCooldown = Math.max(0, shootCooldown - dt);
-      if (tracerTtl > 0) {
-        tracerTtl -= dt;
-        tracerMat.opacity = Math.max(0, tracerTtl / 0.08) * 0.9;
-      }
-      smokes.forEach((s) => {
-        s.t += dt;
-        s.mesh.position.set(s.car.x, 1.6 + (s.t % 1.5) * 1.2, s.car.z);
-        s.mesh.material.opacity = 0.6 * (1 - (s.t % 1.5) / 1.5);
-        const scale = 1 + (s.t % 1.5) * 0.8;
-        s.mesh.scale.set(scale, scale, scale);
-      });
-    },
-    /** Punch what is in front of the player. Returns 'ped' when one went down. */
-    punch(player, peds) {
-      if (punchCooldown > 0) return null;
-      punchCooldown = 0.45;
-      let hit = null;
-      peds.forEach((ped) => {
-        if (ped.state === 'down') return;
-        const dx = ped.x - player.x;
-        const dz = ped.z - player.z;
-        const dist = Math.hypot(dx, dz);
-        if (dist > 2.4) return;
-        if (Math.abs(angleDiff(Math.atan2(dx, dz), player.heading)) > 1.1) return;
-        hit = ped;
-      });
-      return hit;
-    },
-    /** Fire the pistol along (dirX, dirZ). Returns what was hit, if anything. */
-    shoot(player, dirX, dirZ, peds, cars) {
-      if (shootCooldown > 0) return null;
-      shootCooldown = 0.35;
-      const range = TUNE.gunRange;
-      let best = null;
-      let bestT = range;
-      function testCircle(x, z, r, what) {
-        const cx = x - player.x;
-        const cz = z - player.z;
-        const t = cx * dirX + cz * dirZ;
-        if (t < 0 || t > bestT) return;
-        const px = cx - dirX * t;
-        const pz = cz - dirZ * t;
-        if (Math.hypot(px, pz) < r) {
-          bestT = t;
-          best = what;
+  update(dt) {
+    this.punchTimer = Math.max(0, this.punchTimer - dt);
+    this.shootTimer = Math.max(0, this.shootTimer - dt);
+    this.flashTimer = Math.max(0, this.flashTimer - dt);
+  }
+
+  // Punch the nearest walker or cop in front of the player.
+  punch(world) {
+    if (this.punchTimer > 0) return false;
+    this.punchTimer = CONFIG.combat.punchCooldown;
+    const p = world.player;
+    const fx = Math.sin(p.heading);
+    const fz = Math.cos(p.heading);
+    const range = CONFIG.combat.punchRange;
+    const dmg = CONFIG.combat.punchDamage;
+
+    // Walkers first.
+    for (const w of world.pedestrians.walkers) {
+      if (w.down) continue;
+      const dx = w.x - p.x;
+      const dz = w.z - p.z;
+      const d = Math.hypot(dx, dz);
+      if (d < range && dx * fx + dz * fz > 0) {
+        w.health -= dmg;
+        if (w.health <= 0) {
+          w.down = true;
+          w.downTimer = 3;
+          world.police.addWanted(CONFIG.wanted.hitPedestrian);
+          world.toast('You knocked someone out. The cops noticed.');
         }
+        world.audio.punch();
+        return true;
       }
-      peds.forEach((ped) => {
-        if (ped.state !== 'down') testCircle(ped.x, ped.z, 0.8, { type: 'ped', ped });
-      });
-      cars.forEach((car) => {
-        if (!car.disabled) testCircle(car.x, car.z, 2.3, { type: 'car', car });
-      });
-      const endX = player.x + dirX * bestT;
-      const endZ = player.z + dirZ * bestT;
-      tracerGeo.setFromPoints([
-        new THREE.Vector3(player.x, 1.4, player.z),
-        new THREE.Vector3(endX, 1.2, endZ),
-      ]);
-      tracerTtl = 0.08;
-      tracerMat.opacity = 0.9;
-      if (best && best.type === 'car') {
-        best.car.health -= TUNE.gunDamage;
-        if (best.car.health <= 0) {
-          best.car.disabled = true;
-          best.car.speed = 0;
-          addSmoke(best.car);
-        }
+    }
+    // Then the police on foot (there are none on foot in this build, but a
+    // punch at a cruiser still counts as hitting the law).
+    for (const car of world.police.cars) {
+      const d = dist2d(p.x, p.z, car.x, car.z);
+      if (d < range + 1.2) {
+        world.police.addWanted(CONFIG.wanted.punchCop);
+        world.toast('You hit a police car. Bad idea.');
+        world.audio.punch();
+        return true;
       }
-      return best;
-    },
-  };
+    }
+    world.audio.punch();
+    return false;
+  }
+
+  // Shoot along the player's aim (the camera's forward on the ground).
+  // Returns true when something was hit.
+  shoot(world) {
+    if (this.shootTimer > 0) return false;
+    this.shootTimer = CONFIG.combat.shootCooldown;
+    const p = world.player;
+    const fx = Math.sin(p.heading);
+    const fz = Math.cos(p.heading);
+    const range = CONFIG.combat.shootRange;
+    const dmg = CONFIG.combat.shootDamage;
+    world.audio.shoot();
+    this.flashTimer = 0.09;
+    this.flashAt = { x: p.x + fx * 1.6, z: p.z + fz * 1.6 };
+
+    // The nearest thing along the aim line, walkers and police cars alike.
+    let best = null;
+    let bestD = range;
+    const consider = (x, z, radius, kind, ref) => {
+      const dx = x - p.x;
+      const dz = z - p.z;
+      const along = dx * fx + dz * fz;
+      if (along <= 0 || along > bestD) return;
+      const side = Math.abs(dx * fz - dz * fx);
+      if (side < radius + 0.6) {
+        best = { kind, ref, along };
+        bestD = along;
+      }
+    };
+    for (const w of world.pedestrians.walkers) {
+      if (!w.down) consider(w.x, w.z, 0.6, 'ped', w);
+    }
+    for (const car of world.police.cars) {
+      consider(car.x, car.z, 1.8, 'cop', car);
+    }
+    if (!best) return false;
+
+    if (best.kind === 'ped') {
+      best.ref.health -= dmg;
+      if (best.ref.health <= 0) {
+        best.ref.down = true;
+        best.ref.downTimer = 3;
+      }
+      world.police.addWanted(CONFIG.wanted.hitPedestrian);
+    } else {
+      best.ref.health = (best.ref.health || CONFIG.combat.copHealth) - dmg;
+      if (best.ref.health <= 0) {
+        world.police.removeCar(best.ref);
+      }
+      world.police.addWanted(CONFIG.wanted.shoot);
+    }
+    return true;
+  }
 }

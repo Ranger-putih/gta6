@@ -1,194 +1,131 @@
-// Cars: one box-built mesh factory (body, cabin, wheels, lights) and the
-// arcade driving physics the player car uses. A car's forward is its local
-// +Z; heading is rotation.y, so forward = (sin(heading), 0, cos(heading)).
+// Cars: a mesh factory that builds a low-poly car from boxes, and the arcade
+// driving model every car in the game shares — the player's car, the traffic
+// and the police. Forward is (sin(heading), cos(heading)) on the ground.
+
 import * as THREE from 'three';
-import { TUNE } from './config.js';
-import { collideCircle } from './city.js';
+import { CONFIG } from './config.js';
+import { clamp, wrapAngle } from './random.js';
 
-const WHEEL_R = 0.42;
-
-function makeWheel() {
-  const steer = new THREE.Group();
-  const spin = new THREE.Group();
-  const tyre = new THREE.Mesh(
-    new THREE.CylinderGeometry(WHEEL_R, WHEEL_R, 0.35, 10),
-    new THREE.MeshLambertMaterial({ color: 0x16181d }),
-  );
-  tyre.rotation.z = Math.PI / 2;
-  tyre.castShadow = true;
-  spin.add(tyre);
-  steer.add(spin);
-  steer.userData.spin = spin;
-  return steer;
-}
-
-/** A stylised car. kind: 'player' | 'parked' | 'traffic' | 'police' | 'sports' | 'taxi'. */
-export function makeCarMesh(color, kind) {
+// Build a car mesh. `color` tints the body; `sport` adds a spoiler and
+// wider wheels. Returns a THREE.Group whose +z is the car's forward.
+export function makeCarMesh(color, sport = false) {
   const group = new THREE.Group();
-  const bodyMat = new THREE.MeshLambertMaterial({ color });
-  const glassMat = new THREE.MeshLambertMaterial({ color: 0x1d2733 });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.75, 4.4), bodyMat);
+  const paint = new THREE.MeshStandardMaterial({
+    color, roughness: 0.35, metalness: 0.55,
+  });
+  const glass = new THREE.MeshStandardMaterial({
+    color: 0x1a2733, roughness: 0.15, metalness: 0.7,
+  });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x1c1e22, roughness: 0.9 });
+
+  // Body: a low slab, a cabin on top, a hood line.
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.62, 4.4), paint);
   body.position.y = 0.62;
   body.castShadow = true;
   group.add(body);
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.65, 2.2), glassMat);
-  cabin.position.set(0, 1.25, -0.3);
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.58, 2.1), glass);
+  cabin.position.set(0, 1.18, -0.25);
   cabin.castShadow = true;
   group.add(cabin);
-  if (kind === 'sports') {
-    const spoiler = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.12, 0.4), bodyMat);
-    spoiler.position.set(0, 1.15, -2.1);
-    group.add(spoiler);
-  }
-  if (kind === 'taxi') {
-    const sign = new THREE.Mesh(
-      new THREE.BoxGeometry(0.9, 0.25, 0.5),
-      new THREE.MeshBasicMaterial({ color: 0xf2c94c }),
-    );
-    sign.position.set(0, 1.7, -0.3);
-    group.add(sign);
-  }
-  // Headlights and tail lights.
-  const headMat = new THREE.MeshBasicMaterial({ color: 0xfff2c0 });
-  const tailMat = new THREE.MeshBasicMaterial({ color: 0xe5534b });
-  [-0.65, 0.65].forEach((x) => {
-    const head = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.2, 0.1), headMat);
-    head.position.set(x, 0.65, 2.21);
-    group.add(head);
-    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.2, 0.1), tailMat);
-    tail.position.set(x, 0.65, -2.21);
-    group.add(tail);
-  });
-  let lightBar = null;
-  if (kind === 'police') {
-    const red = new THREE.Mesh(
-      new THREE.BoxGeometry(0.7, 0.25, 0.5),
-      new THREE.MeshBasicMaterial({ color: 0xff2a2a }),
-    );
-    red.position.set(-0.45, 1.68, -0.3);
-    const blue = new THREE.Mesh(
-      new THREE.BoxGeometry(0.7, 0.25, 0.5),
-      new THREE.MeshBasicMaterial({ color: 0x2a6bff }),
-    );
-    blue.position.set(0.45, 1.68, -0.3);
-    group.add(red);
-    group.add(blue);
-    lightBar = { red, blue };
-  }
-  const wheels = [];
-  const wheelSpots = [
-    [-0.95, 1.45, true],
-    [0.95, 1.45, true],
-    [-0.95, -1.45, false],
-    [0.95, -1.45, false],
-  ];
-  wheelSpots.forEach(([x, z, front]) => {
-    const wheel = makeWheel();
-    wheel.position.set(x, WHEEL_R, z);
-    wheel.userData.front = front;
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.14, 1.0), paint);
+  hood.position.set(0, 0.98, 1.55);
+  group.add(hood);
+
+  // Wheels.
+  const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.3, 12);
+  wheelGeo.rotateZ(Math.PI / 2);
+  for (const [wx, wz] of [[-0.95, 1.45], [0.95, 1.45], [-0.95, -1.45], [0.95, -1.45]]) {
+    const wheel = new THREE.Mesh(wheelGeo, dark);
+    wheel.position.set(wx, 0.36, wz);
+    wheel.castShadow = true;
     group.add(wheel);
-    wheels.push(wheel);
+  }
+
+  // Headlights and taillights.
+  const lightMat = new THREE.MeshStandardMaterial({
+    color: 0xfff2c0, emissive: 0xffedb0, emissiveIntensity: 0.9,
   });
-  group.userData.wheels = wheels;
-  group.userData.lightBar = lightBar;
+  for (const sx of [-0.65, 0.65]) {
+    const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.16, 0.08), lightMat);
+    lamp.position.set(sx, 0.72, 2.22);
+    group.add(lamp);
+  }
+  const tailMat = new THREE.MeshStandardMaterial({
+    color: 0x881111, emissive: 0xaa2222, emissiveIntensity: 0.7,
+  });
+  for (const sx of [-0.65, 0.65]) {
+    const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.14, 0.08), tailMat);
+    lamp.position.set(sx, 0.72, -2.22);
+    group.add(lamp);
+  }
+
+  if (sport) {
+    // A rear spoiler and a lower, wider stance read as "sports car".
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.1, 0.5), dark);
+    wing.position.set(0, 1.15, -2.1);
+    group.add(wing);
+    for (const sx of [-0.8, 0.8]) {
+      const strut = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.35, 0.1), dark);
+      strut.position.set(sx, 0.95, -2.1);
+      group.add(strut);
+    }
+  }
   return group;
 }
 
-/** A car entity: position, heading, speed and its mesh. */
-export function makeCar(kind, color, x, z, heading) {
-  const mesh = makeCarMesh(color, kind);
-  mesh.position.set(x, 0, z);
-  mesh.rotation.y = heading;
+// One car in the world. `mesh` is its group; x/z/heading/speed are the sim.
+export function makeCar(mesh, x, z, heading) {
   return {
-    kind,
-    color,
-    mesh,
-    x,
-    z,
-    heading,
-    speed: 0,
-    steer: 0,
-    maxSpeed: kind === 'sports' ? TUNE.sportsMax : TUNE.carMax,
-    health: 100,
-    disabled: false,
-    crashCooldown: 0,
-    spin: 0,
+    mesh, x, z, heading, speed: 0,
+    // Steering angle the wheels are at (visual only, eased toward target).
+    steerVis: 0,
   };
 }
 
 export function syncCarMesh(car) {
   car.mesh.position.set(car.x, 0, car.z);
   car.mesh.rotation.y = car.heading;
-  const spinAngle = car.spin || 0;
-  car.mesh.userData.wheels.forEach((wheel) => {
-    wheel.userData.spin.rotation.x = spinAngle;
-    wheel.rotation.y = wheel.userData.front ? car.steer * 0.45 : 0;
-  });
-  if (car.mesh.userData.lightBar) {
-    const on = Math.floor(performance.now() / 260) % 2 === 0;
-    car.mesh.userData.lightBar.red.visible = on;
-    car.mesh.userData.lightBar.blue.visible = !on;
-  }
 }
 
-/**
- * One arcade driving step for the player's car. throttle in [-1, 1],
- * steerInput in [-1, 1]. Returns true when it hit something hard.
- */
-export function stepPlayerCar(car, throttle, steerInput, dt, colliders, others, onCrash) {
-  const max = car.maxSpeed;
-  if (throttle > 0) car.speed += TUNE.carAccel * throttle * dt;
-  else if (throttle < 0) {
-    if (car.speed > 0.5) car.speed -= TUNE.carBrake * dt;
-    else car.speed += TUNE.carReverse * -throttle * dt;
-  } else {
-    car.speed -= car.speed * 1.6 * dt;
-    if (Math.abs(car.speed) < 0.05) car.speed = 0;
-  }
-  car.speed = Math.max(-TUNE.carReverse, Math.min(max, car.speed));
-  const speedFactor = Math.min(1, Math.abs(car.speed) / 12);
-  car.steer = steerInput * speedFactor;
-  // D turns right: heading falls while moving forward, and flips in reverse.
-  car.heading -= car.steer * TUNE.steerRate * dt * (car.speed < 0 ? -1 : 1);
+// Arcade driving: throttle in -1..1 (forward/back), steer in -1..1 (D is
+// positive: it decreases the heading, which turns the car toward +x when
+// heading is near PI). Speed eases toward its target with drag, and the
+// heading turns faster the faster the car goes. Returns the new speed.
+export function driveCar(car, dt, throttle, steer, colliders, resolveCircle) {
+  const cfg = CONFIG.cars;
+  let target = 0;
+  if (throttle > 0) target = cfg.maxSpeed * throttle;
+  else if (throttle < 0) target = cfg.maxReverse * throttle;
+  // Approach the target speed with acceleration, then drag.
+  const accel = throttle > 0 ? cfg.accel : throttle < 0 ? cfg.reverseAccel : cfg.brake;
+  const diff = target - car.speed;
+  const step = accel * dt;
+  car.speed += clamp(diff, -step, step);
+  car.speed *= (1 - cfg.drag * dt);
+  if (Math.abs(car.speed) < 0.05 && throttle === 0) car.speed = 0;
+
+  // Steering only bites while moving; it reverses when backing up.
+  const steerAmount = steer * cfg.steerRate * clamp(Math.abs(car.speed) / 12, 0, 1);
+  car.heading -= steerAmount * dt * Math.sign(car.speed || 1);
+  car.heading = wrapAngle(car.heading);
+
   const fx = Math.sin(car.heading);
   const fz = Math.cos(car.heading);
-  car.x += fx * car.speed * dt;
-  car.z += fz * car.speed * dt;
-  car.spin += (car.speed * dt) / WHEEL_R;
-
-  let crashed = false;
-  const before = { x: car.x, z: car.z };
-  collideCircle(car, TUNE.carRadius, colliders);
-  if ((car.x !== before.x || car.z !== before.z) && Math.abs(car.speed) > 8) {
-    crashed = true;
-    car.speed *= 0.45;
+  let nx = car.x + fx * car.speed * dt;
+  let nz = car.z + fz * car.speed * dt;
+  // Keep the car inside the world and out of buildings.
+  nx = clamp(nx, -CONFIG.world.half + 2, CONFIG.world.half + 44);
+  nz = clamp(nz, -CONFIG.world.half + 2, CONFIG.world.half + 2);
+  if (resolveCircle) {
+    const fixed = resolveCircle(nx, nz, 1.5);
+    // A hard stop on the wall: hitting a building kills the speed.
+    if (fixed.x !== nx || fixed.z !== nz) car.speed *= 0.3;
+    nx = fixed.x;
+    nz = fixed.z;
   }
-  // Push apart from the other cars.
-  others.forEach((other) => {
-    if (other === car || other.disabled) return;
-    const dx = car.x - other.x;
-    const dz = car.z - other.z;
-    const d = Math.hypot(dx, dz);
-    const min = TUNE.carRadius * 2;
-    if (d > 0.001 && d < min) {
-      const push = (min - d) / 2;
-      const nx = dx / d;
-      const nz = dz / d;
-      car.x += nx * push;
-      car.z += nz * push;
-      other.x -= nx * push;
-      other.z -= nz * push;
-      const rel = Math.abs(car.speed - other.speed);
-      if (rel > 6 && car.crashCooldown <= 0) {
-        crashed = true;
-        car.speed *= 0.7;
-        other.speed *= 0.7;
-        car.crashCooldown = 0.8;
-        if (onCrash) onCrash(rel);
-      }
-    }
-  });
-  car.crashCooldown = Math.max(0, car.crashCooldown - dt);
+  car.x = nx;
+  car.z = nz;
+  car.steerVis += (steer * 0.45 - car.steerVis) * Math.min(1, dt * 8);
   syncCarMesh(car);
-  return crashed;
+  return car.speed;
 }

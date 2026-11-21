@@ -1,79 +1,117 @@
-// Traffic: AI cars that loop around city blocks in the right-hand lane,
-// stopping for the car ahead. They give the streets life and something to
-// dodge while driving.
-import { CITY } from './config.js';
-import { makeCar, syncCarMesh } from './vehicles.js';
-import { collideCircle } from './city.js';
+// Traffic: cars that drive the road grid on their own. Each one picks a road,
+// drives along it, and turns onto another road at an intersection. They keep
+// their distance from the car ahead and from the player, and they never
+// reverse. All of it is deterministic from the seeded rng.
 
-const TRAFFIC_COLORS = [0xd9d9d9, 0x8a94a6, 0x5a6b7d, 0xb03a2e, 0x2e86ab, 0xe8b48c, 0x3d9970];
-const LANE = 3.5;
+import * as THREE from 'three';
+import { CONFIG } from './config.js';
+import { range, rangeInt, pick } from './random.js';
+import { makeCarMesh, makeCar, syncCarMesh } from './vehicles.js';
 
-/** Waypoints for a loop around one block, in the right-hand lane of each road. */
-function loopWaypoints(bx, bz) {
-  const half = CITY.pitch / 2;
-  const lane = half + LANE;
-  return [
-    { x: bx - lane, z: bz + lane },
-    { x: bx + lane, z: bz + lane },
-    { x: bx + lane, z: bz - lane },
-    { x: bx - lane, z: bz - lane },
-  ];
-}
+const TRAFFIC_COLORS = [0x4a6b8a, 0x8a4a4a, 0x5a5a5a, 0x7a7a3a, 0x3a6b5a, 0x9a9a9a];
 
-export function createTraffic(scene, rng) {
-  const cars = [];
-  const blockCentres = [-120, -40, 40, 120];
-  for (let i = 0; i < 10; i += 1) {
-    const bx = rng.pick(blockCentres);
-    const bz = rng.pick(blockCentres);
-    const kind = rng.next() < 0.15 ? 'taxi' : 'traffic';
-    const color = kind === 'taxi' ? 0xf2c94c : rng.pick(TRAFFIC_COLORS);
-    const waypoints = loopWaypoints(bx, bz);
-    const start = rng.int(0, 3);
-    const car = makeCar(kind, color, waypoints[start].x, waypoints[start].z, 0);
-    car.speed = rng.range(9, 13);
-    car.waypoints = waypoints;
-    car.wp = (start + 1) % 4;
-    car.baseSpeed = car.speed;
-    car.stopped = false;
-    scene.add(car.mesh);
-    cars.push(car);
+export class Traffic {
+  constructor(scene, city, rng) {
+    this.scene = scene;
+    this.city = city;
+    this.rng = rng;
+    this.cars = [];
+    const roads = CONFIG.world.roads;
+    for (let i = 0; i < CONFIG.cars.trafficCount; i += 1) {
+      // Start on a random road, on the right-hand side of it.
+      const alongX = this.rng() < 0.5;
+      const road = pick(rng, roads);
+      const t = range(rng, -170, 170);
+      const x = alongX ? t : road + 3;
+      const z = alongX ? road + 3 : t;
+      const heading = alongX ? (t > 0 ? Math.PI : 0) : (t > 0 ? -Math.PI / 2 : Math.PI / 2);
+      const mesh = makeCarMesh(pick(rng, TRAFFIC_COLORS));
+      scene.add(mesh);
+      const car = makeCar(mesh, x, z, heading);
+      car.speed = range(rng, 7, CONFIG.cars.trafficSpeed);
+      car.alongX = alongX;
+      car.road = road;
+      car.side = 3;
+      car.targetSpeed = car.speed;
+      this.cars.push(car);
+      syncCarMesh(car);
+    }
   }
-  return {
-    cars,
-    update(dt, playerCar, colliders) {
-      cars.forEach((car) => {
-        if (car.disabled) return;
-        const target = car.waypoints[car.wp];
-        const dx = target.x - car.x;
-        const dz = target.z - car.z;
+
+  // The nearest intersection ahead on this car's road.
+  nextIntersection(car) {
+    const roads = CONFIG.world.roads;
+    const pos = car.alongX ? car.x : car.z;
+    const dir = car.alongX
+      ? (Math.sin(car.heading) > 0 ? 1 : -1)
+      : (Math.cos(car.heading) > 0 ? 1 : -1);
+    let best = null;
+    for (const r of roads) {
+      const d = (r - pos) * dir;
+      if (d > 4 && (best === null || d < best)) best = d;
+    }
+    return best === null ? 999 : best;
+  }
+
+  update(dt, playerPos) {
+    for (const car of this.cars) {
+      // Slow down for the car ahead or for the player in front.
+      let want = car.targetSpeed;
+      for (const other of this.cars) {
+        if (other === car) continue;
+        const dx = other.x - car.x;
+        const dz = other.z - car.z;
+        const ahead = car.alongX
+          ? dx * Math.sin(car.heading) + dz * Math.cos(car.heading)
+          : dx * Math.sin(car.heading) + dz * Math.cos(car.heading);
         const dist = Math.hypot(dx, dz);
-        if (dist < 3) {
-          car.wp = (car.wp + 1) % 4;
-          return;
+        if (ahead > 0 && ahead < 12 && dist < 12) want = Math.min(want, 4);
+      }
+      if (playerPos) {
+        const dx = playerPos.x - car.x;
+        const dz = playerPos.z - car.z;
+        const ahead = dx * Math.sin(car.heading) + dz * Math.cos(car.heading);
+        const dist = Math.hypot(dx, dz);
+        if (ahead > 0 && ahead < 10 && dist < 10) want = Math.min(want, 2.5);
+      }
+      car.speed += (want - car.speed) * Math.min(1, dt * 1.5);
+
+      // Drive forward; turn at an intersection onto a crossing road.
+      const fx = Math.sin(car.heading);
+      const fz = Math.cos(car.heading);
+      car.x += fx * car.speed * dt;
+      car.z += fz * car.speed * dt;
+      const distToTurn = this.nextIntersection(car);
+      if (distToTurn < 6 && this.rng() < 0.02 + dt * 0.6) {
+        // Snap onto the crossing road and pick a new direction along it.
+        const roads = CONFIG.world.roads;
+        const cross = car.alongX ? car.z : car.x;
+        let nearest = roads[0];
+        for (const r of roads) {
+          if (Math.abs(r - cross) < Math.abs(nearest - cross)) nearest = r;
         }
-        const wantedHeading = Math.atan2(dx, dz);
-        let diff = wantedHeading - car.heading;
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        car.heading += Math.max(-2.4 * dt, Math.min(2.4 * dt, diff));
-        // Stop for the car ahead (traffic, police or the player).
-        let blocked = false;
-        const ahead = { x: car.x + Math.sin(car.heading) * 7, z: car.z + Math.cos(car.heading) * 7 };
-        const all = playerCar ? [...cars, playerCar] : cars;
-        all.forEach((other) => {
-          if (other === car || other.disabled) return;
-          if (Math.hypot(other.x - ahead.x, other.z - ahead.z) < 3.5) blocked = true;
-        });
-        car.stopped = blocked;
-        const targetSpeed = blocked ? 0 : car.baseSpeed;
-        car.speed += (targetSpeed - car.speed) * Math.min(1, 2 * dt);
-        car.x += Math.sin(car.heading) * car.speed * dt;
-        car.z += Math.cos(car.heading) * car.speed * dt;
-        car.spin += (car.speed * dt) / 0.42;
-        collideCircle(car, 2.3, colliders);
-        syncCarMesh(car);
-      });
-    },
-  };
+        if (car.alongX) {
+          car.z = nearest + 3;
+          car.alongX = false;
+          car.heading = this.rng() < 0.5 ? 0 : Math.PI;
+        } else {
+          car.x = nearest + 3;
+          car.alongX = true;
+          car.heading = this.rng() < 0.5 ? Math.PI / 2 : -Math.PI / 2;
+        }
+        car.road = nearest;
+      }
+      // Wrap around the city edge instead of driving off the map.
+      if (car.x > 198) { car.x = -198; }
+      if (car.x < -198) { car.x = 198; }
+      if (car.z > 198) { car.z = -198; }
+      if (car.z < -198) { car.z = 198; }
+      syncCarMesh(car);
+    }
+  }
+
+  // Cars as plain dots for the minimap.
+  dots() {
+    return this.cars.map((c) => ({ x: c.x, z: c.z }));
+  }
 }

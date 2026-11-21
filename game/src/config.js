@@ -1,97 +1,138 @@
-// Vice Rush — every tuning number, colour and mission in one place.
-// The city is a road grid: roads run at the centres listed in CITY.roads,
-// blocks sit between them. East of x = beachX is sand, then the sea.
-export const STEP = 1 / 60;
+// Vice Rush — tuning and world constants.
+// One place holds every number the game is balanced around, so a change to a
+// mission, a speed or a price happens here and nowhere else.
 
-/** Where the save (money, missions, best) is kept between visits. */
-export const SAVE_KEY = 'vice-rush.save.v1';
-
-export const CITY = {
-  pitch: 80,
-  road: 16,
-  roads: [-160, -80, 0, 80, 160],
-  half: 200,
-  beachX: 200,
-  sandEnd: 238,
-  seaX: 238,
-  groundMinX: -320,
-  groundMaxX: 460,
-  groundMinZ: -320,
-  groundMaxZ: 320,
-};
-
-export const PALETTE = {
-  sky: 0xff9e57,
-  fog: 0xdd875f,
-  ground: 0x3a3f4a,
-  road: 0x2e323d,
-  sidewalk: 0x8d8578,
-  sand: 0xe8cf9a,
-  sea: 0x1f6f8b,
-  building: [0xf2d8a7, 0xe8b48c, 0xc9d6df, 0xf6e3c5, 0xd9a441, 0x9fb8c8, 0xe07856, 0x7fb069],
-  windowLit: 0xffd27a,
-  windowDark: 0x2c3550,
-  palm: 0x2e7d4f,
-  trunk: 0x7a5230,
-  lamp: 0xffe9a8,
-  player: 0x4fc3f7,
-  police: 0x2b4acb,
-  taxi: 0xf2c94c,
-};
-
-export const TUNE = {
-  walkSpeed: 6,
-  runSpeed: 10.5,
-  playerRadius: 0.7,
-  carRadius: 2.3,
-  carAccel: 17,
-  carBrake: 30,
-  carReverse: 11,
-  carMax: 40,
-  sportsMax: 50,
-  steerRate: 2.0,
-  wantedDecaySeconds: 26,
-  policeRamDamage: 9,
-  policeShootDamage: 4,
-  punchDamage: 25,
-  gunDamage: 40,
-  gunRange: 60,
-  bustSeconds: 2.5,
-  healthRegen: 2.5,
-};
-
-/** The story, in three jobs for Raka, new in town and working for Mira. */
-export const MISSIONS = [
-  {
-    id: 'package',
-    title: 'Package for Mira',
-    brief: 'Mira needs a package at the Beach Cafe. Reach the yellow marker and press E.',
-    target: { x: 208, z: -30 },
-    radius: 5,
-    reward: 300,
-    type: 'reach',
+export const CONFIG = {
+  // The city is a square. Roads run both ways at these x and z coordinates.
+  world: {
+    half: 200,
+    roads: [-160, -80, 0, 80, 160],
+    roadWidth: 12,
+    sidewalkWidth: 4,
+    // East of x = 200 the land gives way to sand, then the sea.
+    beachAt: 200,
+    seaAt: 236,
+    // A fixed seed keeps the city identical on every load.
+    seed: 7,
   },
-  {
-    id: 'steal',
-    title: "Dito's Ride",
-    brief: 'Steal the yellow sports car at the north lot, then bring it to the garage marker. The cops will notice.',
-    target: { x: -80, z: -168 },
-    garage: { x: -168, z: 152 },
-    radius: 6,
-    reward: 500,
-    type: 'steal-deliver',
-  },
-  {
-    id: 'escape',
-    title: 'Lose the Heat',
-    brief: 'Raise your wanted level to 3 stars, then lose the cops until it drops back to zero.',
-    target: null,
-    radius: 0,
-    reward: 400,
-    type: 'escape',
-  },
-];
 
-export const PLAYER_START = { x: 10, z: 24, heading: Math.PI };
+  player: {
+    start: { x: 10, z: 24, heading: Math.PI },
+    walkSpeed: 6,
+    runSpeed: 10.5,
+    radius: 0.55,
+    health: 100,
+    startMoney: 150,
+  },
 
-export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+  // Fixed landmarks. The Beach Cafe and the garage are mission landmarks, so
+  // their boxes and their markers are defined together here and nowhere else.
+  // A marker must never sit inside its building's box: the cafe box spans
+  // z -46..-34, so the mission 1 marker sits at z -30, clear of it on the sand;
+  // the garage box spans z 161..175, so the mission 2 marker sits at z 152.
+  cafe: { x: 208, z: -40, w: 16, d: 12, h: 7 },
+  mission1Target: { x: 208, z: -30 },
+  garage: { x: -168, z: 168, w: 18, d: 14, h: 8 },
+  mission2Target: { x: -168, z: 152 },
+  sportsCar: { x: -80, z: -168, heading: Math.PI / 2 },
+
+  // Parked cars the player can steal, placed on roads around the city.
+  parkedCars: [
+    { x: 192, z: 120, heading: Math.PI, color: 0xb03a2e, name: 'Crimson Coupe' },
+    { x: -84, z: 84, heading: 0, color: 0x2e6db0, name: 'Blue Sedan' },
+    { x: 84, z: -84, heading: Math.PI, color: 0x3f8f5f, name: 'Green Hatchback' },
+    { x: -164, z: -84, heading: Math.PI / 2, color: 0xd8d8d8, name: 'White Van' },
+    { x: 164, z: 164, heading: -Math.PI / 2, color: 0x8a5fc0, name: 'Purple Coupe' },
+  ],
+
+  cars: {
+    // Arcade handling numbers for the player's car.
+    accel: 22,
+    brake: 34,
+    reverseAccel: 12,
+    maxSpeed: 42,
+    maxReverse: 10,
+    drag: 0.55,
+    steerRate: 1.9,
+    // Traffic cars cruise slower and never reverse.
+    trafficSpeed: 11,
+    trafficCount: 10,
+    policeSpeed: 46,
+    policeCount: 5,
+  },
+
+  pedestrians: {
+    count: 14,
+    walkSpeed: 1.6,
+  },
+
+  wanted: {
+    // Crimes and how many stars they add.
+    stealCar: 1,
+    hitPedestrian: 1,
+    shoot: 1,
+    punchCop: 2,
+    // Wanted fades when no police car is close for this long.
+    decayAfterSeconds: 14,
+    decayPerSecond: 0.25,
+    // A cop this close, for this long, busts the player.
+    bustRadius: 3.2,
+    bustSeconds: 2.2,
+  },
+
+  missions: [
+    {
+      id: 'package',
+      title: 'Package for Mira',
+      brief: 'Mira needs a package at the Beach Cafe. Reach the yellow marker and press E.',
+      type: 'reach',
+      target: { x: 208, z: -30 },
+      radius: 5,
+      reward: 300,
+    },
+    {
+      id: 'steal',
+      title: "Dito's Ride",
+      brief: "Steal Dito's yellow sports car, then deliver it to the garage marker.",
+      type: 'steal-deliver',
+      carAt: { x: -80, z: -168 },
+      target: { x: -168, z: 152 },
+      radius: 6,
+      reward: 500,
+    },
+    {
+      id: 'escape',
+      title: 'Lose the Heat',
+      brief: 'The cops are on you. Break line of sight and get your wanted level to zero.',
+      type: 'escape',
+      reward: 400,
+    },
+  ],
+
+  combat: {
+    punchRange: 2.2,
+    punchDamage: 34,
+    punchCooldown: 0.45,
+    shootRange: 60,
+    shootDamage: 50,
+    shootCooldown: 0.35,
+    pedHealth: 100,
+    copHealth: 150,
+  },
+
+  camera: {
+    distance: 13,
+    minDistance: 6,
+    maxDistance: 26,
+    height: 5.5,
+    // A snap factor of 10 makes the camera settle instantly after a teleport.
+    snapLerp: 10,
+    followLerp: 7,
+  },
+
+  // Shot mode stages the world and steps it this many fixed steps.
+  shots: {
+    steps: 90,
+    dt: 1 / 60,
+  },
+};

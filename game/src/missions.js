@@ -1,201 +1,148 @@
-// Missions for Vice Rush. Five jobs, chained in order, each a chain of
-// named stages: the HUD shows STAGE n/N so the player always knows
-// where they stand. A stage is one verb — reach a point, steal a car,
-// deliver it, race checkpoints on a timer, take out a gang, lose the
-// cops — and every target sits on open ground, never inside a building.
+// Missions: five staged jobs with par times, gold/silver/bronze ratings and
+// a result screen. Stage types: goto, steal, deliver, race, eliminate, escape.
+//
+// Ordering rule (a bug from the first round-6 attempt): an escape stage
+// applies its wanted level when the stage STARTS, before any completion
+// check can run, and the world updates the police (wanted decay) before it
+// updates missions — so the stage can never complete in the same instant
+// its heat is applied.
 
-import { MISSIONS } from './config.js';
-import { audio } from './audio.js';
-
-function dist(ax, az, bx, bz) {
-  return Math.hypot(ax - bx, az - bz);
-}
+import { MISSIONS, ratingForTime } from './config.js';
 
 export class Missions {
-  constructor(world) {
-    this.world = world;
-    this.index = 0;
-    this.stage = 0;
+  constructor(hooks) {
+    this.hooks = hooks || {};
+    this.current = 0;
+    this.stageIndex = 0;
+    this.startTime = 0;
+    this.heatSeen = false;
+    this.checkpointIndex = 0;
     this.done = [];
-    this.active = false;
-    this.timer = 0;
-    this.raceCp = 0;
-    this.eliminated = 0;
-    this.rating = null;
-    this.gangSpawned = false;
+    this.ratings = {};
+    this.result = null;
+    this.started = false;
   }
 
-  get current() {
-    return MISSIONS[this.index] || null;
+  mission() {
+    return MISSIONS[this.current];
   }
 
-  get currentStage() {
-    const m = this.current;
-    return m ? m.stages[this.stage] : null;
+  missionTime(gameTime) {
+    return this.started ? Math.max(0, gameTime - this.startTime) : 0;
   }
 
-  get stageCount() {
-    const m = this.current;
-    return m ? m.stages.length : 0;
+  startMission(index, gameTime, police) {
+    this.current = index;
+    this.stageIndex = 0;
+    this.checkpointIndex = 0;
+    this.startTime = gameTime;
+    this.started = true;
+    this.result = null;
+    this._enterStage(police);
+    if (this.hooks.onMissionStart) this.hooks.onMissionStart(this.mission());
   }
 
-  start() {
-    this.active = true;
-    this.index = 0;
-    this.stage = 0;
-    this.done = [];
-    this.beginStage();
+  _enterStage(police) {
+    const stage = this.mission().stages[this.stageIndex];
+    this.heatSeen = false;
+    if (stage.type === 'escape') {
+      // Apply the heat FIRST, then the stage can only end once the police
+      // decay has brought wanted back to zero in a later frame.
+      if (police && police.wantedCount() < 2) police.setWanted(2);
+      this.heatSeen = true;
+    }
+    if (stage.type === 'race') this.checkpointIndex = 0;
   }
 
-  // Restore progress from a save: skip the missions already done.
-  restore(doneIds) {
-    this.done = (doneIds || []).slice();
-    let i = 0;
-    while (i < MISSIONS.length && this.done.includes(MISSIONS[i].id)) i++;
-    this.index = Math.min(i, MISSIONS.length - 1);
-    this.stage = 0;
-    this.active = this.index < MISSIONS.length;
-    if (this.active) this.beginStage();
+  stage() {
+    return this.mission().stages[this.stageIndex];
   }
 
-  // Side effects when a stage begins: spawn the gang, light the wanted
-  // level for an escape, start the race clock, and make sure the car a
-  // delivery needs is still drivable.
-  beginStage() {
-    const m = this.current;
-    const s = this.currentStage;
-    if (!m || !s) return;
-    if (s.type === 'deliver') {
-      // The sports car is Mira's prize: it cannot arrive wrecked.
-      this.world.sportsCar.repair();
+  stageCount() {
+    return this.mission().stages.length;
+  }
+
+  stageLabel() {
+    const m = this.mission();
+    const s = this.stage();
+    let extra = '';
+    if (s.type === 'race') extra = ` ${this.checkpointIndex + 1}/${s.checkpoints.length}`;
+    return `STAGE ${this.stageIndex + 1}/${m.stages.length}${extra} — ${s.label}`;
+  }
+
+  // Where the player should go next, for the HUD, minimap and autopilot.
+  target() {
+    const s = this.stage();
+    if (s.type === 'goto' || s.type === 'steal' || s.type === 'deliver') {
+      return { x: s.x, z: s.z, radius: s.radius || 8 };
     }
     if (s.type === 'race') {
-      this.timer = 0;
-      this.raceCp = 0;
-      this.rating = null;
+      const cp = s.checkpoints[this.checkpointIndex];
+      return { x: cp[0], z: cp[1], radius: s.radius || 8 };
     }
-    if (s.type === 'eliminate') {
-      this.eliminated = 0;
-      this.world.pedestrians.spawnGang();
-      this.gangSpawned = true;
-    }
-    if (s.type === 'escape') {
-      // An escape only works if there is heat to lose.
-      const heat = m.id === 'escape' ? 3 : 2;
-      this.world.police.setWanted(heat);
-      this.world.hud.toast('The cops are onto you — lose them!');
-    }
-  }
-
-  // Called by combat when a gang member goes down.
-  onGangDown() {
-    if (!this.active) return;
-    const s = this.currentStage;
-    if (s && s.type === 'eliminate') {
-      this.eliminated += 1;
-      this.world.hud.toast(`Gang down — ${this.eliminated}/${s.count}`);
-    }
-  }
-
-  update(dt) {
-    if (!this.active) return;
-    const m = this.current;
-    const s = this.currentStage;
-    if (!m || !s) return;
-    const p = this.world.player;
-
-    if (s.type === 'goto') {
-      if (dist(p.x, p.z, s.x, s.z) < s.radius) this.completeStage();
-    } else if (s.type === 'steal') {
-      if (p.car === this.world.sportsCar) this.completeStage();
-    } else if (s.type === 'deliver') {
-      if (p.car === this.world.sportsCar && dist(p.x, p.z, s.x, s.z) < s.radius) this.completeStage();
-    } else if (s.type === 'race') {
-      this.timer += dt;
-      const cp = s.checkpoints[this.raceCp];
-      if (cp && dist(p.x, p.z, cp.x, cp.z) < 10) {
-        this.raceCp += 1;
-        audio.checkpoint();
-        this.world.hud.toast(`CHECKPOINT ${this.raceCp}/${s.checkpoints.length}`);
-        if (this.raceCp >= s.checkpoints.length) this.completeStage();
-      }
-    } else if (s.type === 'eliminate') {
-      if (this.eliminated >= s.count) this.completeStage();
-    } else if (s.type === 'escape') {
-      if (this.world.police.wanted <= 0) this.completeStage();
-    }
-  }
-
-  completeStage() {
-    const m = this.current;
-    const s = this.currentStage;
-    audio.pickup();
-    this.stage += 1;
-    if (this.stage >= m.stages.length) {
-      this.completeMission();
-      return;
-    }
-    const next = this.currentStage;
-    this.world.hud.toast(`STAGE ${this.stage + 1}/${m.stages.length} — ${next.name}`);
-    this.beginStage();
-  }
-
-  completeMission() {
-    const m = this.current;
-    this.world.addMoney(m.reward);
-    this.world.addXp(m.xp);
-    this.world.combat.addAmmo(24);
-    let extra = '';
-    if (m.id === 'sprint') {
-      const t = this.timer;
-      this.rating = t <= m.stages[1].gold ? 'GOLD' : t <= m.stages[1].silver ? 'SILVER' : 'BRONZE';
-      extra = ` — ${this.rating} in ${t.toFixed(1)}s`;
-    }
-    this.done.push(m.id);
-    audio.missionDone();
-    this.world.hud.toast(`Job done: ${m.name} — +$${m.reward}${extra}`);
-    this.world.save();
-    this.index += 1;
-    this.stage = 0;
-    if (this.index >= MISSIONS.length) {
-      this.active = false;
-      this.world.hud.toast('All jobs done — Sunset Bay is yours, Raka.');
-      return;
-    }
-    const next = this.current;
-    this.world.hud.toast(`NEW JOB: ${next.name} — ${next.brief}`);
-    this.beginStage();
-  }
-
-  // The point the minimap beacon and the world marker aim at, or null
-  // when the current stage has no single point (an escape).
-  targetPos() {
-    const s = this.currentStage;
-    if (!s) return null;
-    if (s.type === 'goto' || s.type === 'deliver') return { x: s.x, z: s.z };
-    if (s.type === 'steal') return { x: this.world.sportsCar.x, z: this.world.sportsCar.z };
-    if (s.type === 'race') return s.checkpoints[this.raceCp] || null;
-    if (s.type === 'eliminate') return { x: s.area.x, z: s.area.z };
+    if (s.type === 'eliminate') return { x: s.x, z: s.z, radius: 30 };
     return null;
   }
 
-  // Everything the HUD needs in one object.
-  status() {
-    const m = this.current;
-    const s = this.currentStage;
-    if (!m || !s) return { done: true, text: 'All jobs done' };
-    let text = s.name;
-    if (s.type === 'race') text += ` — CP ${this.raceCp}/${s.checkpoints.length} — ${this.timer.toFixed(1)}s`;
-    if (s.type === 'eliminate') text += ` — ${this.eliminated}/${s.count} down`;
-    if (s.type === 'escape') text += ' — stay clean until the stars fade';
-    return {
-      done: false,
-      missionName: m.name,
-      stage: this.stage + 1,
-      stageCount: m.stages.length,
-      stageName: s.name,
-      text,
-      target: this.targetPos(),
+  update(gameTime, ctx) {
+    if (!this.started || this.result) return;
+    const s = this.stage();
+    const d = (x, z) => Math.hypot(ctx.x - x, ctx.z - z);
+    let done = false;
+    if (s.type === 'goto') {
+      done = d(s.x, s.z) < (s.radius || 8);
+    } else if (s.type === 'steal') {
+      done = !!ctx.inCar && ctx.carName === 'Gold Sports';
+    } else if (s.type === 'deliver') {
+      done = !!ctx.inCar && ctx.carName === 'Gold Sports' && d(s.x, s.z) < (s.radius || 9);
+    } else if (s.type === 'race') {
+      const cp = s.checkpoints[this.checkpointIndex];
+      if (d(cp[0], cp[1]) < (s.radius || 8)) {
+        this.checkpointIndex += 1;
+        if (this.hooks.onCheckpoint) this.hooks.onCheckpoint(this.checkpointIndex, s.checkpoints.length);
+        if (this.checkpointIndex >= s.checkpoints.length) done = true;
+      }
+    } else if (s.type === 'eliminate') {
+      done = ctx.crewLeft === 0;
+    } else if (s.type === 'escape') {
+      // Heat was applied at stage start; the police update already ran
+      // this frame, so wanted==0 here means the player truly lost them.
+      done = this.heatSeen && ctx.wanted === 0;
+    }
+    if (done) this._advance(gameTime, ctx);
+  }
+
+  _advance(gameTime, ctx) {
+    const m = this.mission();
+    if (this.stageIndex + 1 < m.stages.length) {
+      this.stageIndex += 1;
+      this._enterStage(ctx.police);
+      if (this.hooks.onStageComplete) this.hooks.onStageComplete(this.stage());
+      return;
+    }
+    const seconds = this.missionTime(gameTime);
+    const rating = ratingForTime(seconds, m);
+    this.done.push(m.id);
+    this.ratings[m.id] = rating;
+    this.result = {
+      id: m.id,
+      name: m.name,
+      time: seconds,
+      rating,
+      reward: m.reward,
+      xp: m.xp,
     };
+    this.started = false;
+    if (this.hooks.onMissionComplete) this.hooks.onMissionComplete(this.result);
+  }
+
+  // Called by the world after the result screen is dismissed.
+  nextMission(gameTime, police) {
+    this.result = null;
+    if (this.current + 1 < MISSIONS.length) {
+      this.startMission(this.current + 1, gameTime, police);
+      return true;
+    }
+    return false;
   }
 }

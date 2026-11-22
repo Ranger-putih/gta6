@@ -5,139 +5,103 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Vice Rush — Sunset Bay</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: #101018; }
-  body { font-family: 'Segoe UI', system-ui, sans-serif; color: #f0f0f0; }
-  #game { position: fixed; inset: 0; }
-  #game canvas { display: block; }
-  .panel {
-    position: absolute; background: rgba(10, 10, 18, 0.62);
-    border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px;
-    padding: 8px 12px; backdrop-filter: blur(2px);
-  }
-  #topleft { top: 12px; left: 12px; min-width: 210px; }
-  #money { font-size: 26px; font-weight: 800; color: #7ee787; letter-spacing: 0.5px; }
-  #wanted { font-size: 22px; letter-spacing: 3px; color: #ffd94d; min-height: 26px; }
-  #rankline, #clockline { font-size: 13px; color: #d8d8e0; margin-top: 2px; }
-  #rankbarwrap { height: 5px; background: rgba(255,255,255,0.18); border-radius: 3px; margin-top: 4px; overflow: hidden; }
-  #rankfill { height: 100%; width: 0%; background: #ffd94d; border-radius: 3px; }
-  #topright { top: 12px; right: 12px; display: flex; gap: 10px; align-items: flex-start; background: none; border: none; padding: 0; }
-  #objective { max-width: 300px; font-size: 14px; line-height: 1.45; text-align: right; }
-  #objective b { color: #ffd94d; font-size: 15px; }
-  #minimap { width: 220px; height: 220px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.25); background: #101018; }
-  #bottomleft { bottom: 12px; left: 12px; min-width: 200px; }
-  #healthrow { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-  #healthbarwrap { flex: 1; height: 8px; background: rgba(255,255,255,0.18); border-radius: 4px; overflow: hidden; }
-  #healthfill { height: 100%; width: 100%; background: #4caf50; }
-  #weaponrow { margin-top: 6px; font-size: 14px; font-weight: 700; letter-spacing: 1px; }
-  #weaponrow span { color: #ffd94d; }
-  #bottomright { bottom: 12px; right: 12px; text-align: right; min-width: 130px; }
-  #speed { font-size: 34px; font-weight: 800; line-height: 1; }
-  #speedunit { font-size: 12px; color: #c8c8d0; }
-  #carname { font-size: 14px; font-weight: 700; color: #ffd94d; }
-  #carcond { font-size: 13px; color: #e8e8e8; }
-  #toasts { position: absolute; top: 38%; left: 50%; transform: translateX(-50%); text-align: center; pointer-events: none; }
-  .toast {
-    background: rgba(10, 10, 18, 0.78); border: 1px solid rgba(255, 217, 77, 0.5);
-    color: #ffe9a8; border-radius: 6px; padding: 7px 16px; margin-top: 6px;
-    font-size: 15px; font-weight: 600; display: inline-block;
-  }
-  #crosshair {
-    position: absolute; left: 50%; top: 50%; width: 14px; height: 14px;
-    margin: -7px 0 0 -7px; pointer-events: none; opacity: 0.85;
-  }
-  #crosshair::before, #crosshair::after {
-    content: ''; position: absolute; background: #fff;
-  }
-  #crosshair::before { left: 6px; top: 0; width: 2px; height: 14px; }
-  #crosshair::after { left: 0; top: 6px; width: 14px; height: 2px; }
-  .screen {
-    position: absolute; inset: 0; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; text-align: center;
-    background: linear-gradient(180deg, rgba(8,8,16,0.55), rgba(8,8,16,0.85));
-    z-index: 10;
-  }
-  .screen h1 { font-size: 64px; font-weight: 900; letter-spacing: 4px; color: #ffd94d; text-shadow: 0 4px 24px rgba(0,0,0,0.8); }
-  .screen h2 { font-size: 22px; font-weight: 600; color: #f0f0f0; margin-top: 4px; }
-  .screen p { max-width: 560px; margin: 14px 0; color: #d8d8e0; font-size: 15px; line-height: 1.6; }
-  .screen .keys { font-size: 13px; color: #b8b8c0; line-height: 1.9; }
-  .screen button {
-    margin-top: 20px; padding: 13px 34px; font-size: 18px; font-weight: 800;
-    letter-spacing: 1px; color: #101018; background: #ffd94d; border: none;
-    border-radius: 8px; cursor: pointer;
-  }
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0a0c12; height: 100%; font-family: 'Segoe UI', Arial, sans-serif; }
+  #game { display: block; width: 100vw; height: 100vh; }
+  #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; z-index: 5; display: none; }
+  #hud-topleft { position: absolute; top: 14px; left: 16px; }
+  #hud-money { font-size: 30px; font-weight: 800; color: #7dff8a; text-shadow: 0 2px 4px #000; }
+  #hud-wanted { font-size: 22px; letter-spacing: 2px; margin-top: 2px; text-shadow: 0 2px 4px #000; }
+  #hud-health { width: 170px; height: 14px; background: rgba(0,0,0,.55); border: 1px solid #888; margin-top: 6px; position: relative; }
+  #hud-health-fill { height: 100%; background: linear-gradient(90deg, #37c837, #7dff8a); width: 100%; }
+  #hud-health-text { position: absolute; inset: 0; text-align: center; font-size: 10px; line-height: 14px; color: #fff; text-shadow: 0 1px 2px #000; }
+  #hud-topright { position: absolute; top: 14px; right: 16px; text-align: right; text-shadow: 0 2px 4px #000; }
+  #hud-clock { font-size: 26px; font-weight: 700; }
+  #hud-district { font-size: 15px; color: #ffd94a; }
+  #hud-coins { font-size: 15px; color: #ffd94a; margin-top: 2px; }
+  #hud-mission { position: absolute; top: 120px; left: 16px; background: rgba(0,0,0,.55); border-left: 4px solid #ffd94a; padding: 10px 12px; max-width: 340px; }
+  #hud-mission-name { font-size: 17px; font-weight: 700; color: #ffd94a; }
+  #hud-stage { font-size: 13px; margin-top: 4px; color: #eee; }
+  #hud-timer { font-size: 15px; margin-top: 4px; color: #7dd8ff; font-weight: 700; }
+  #hud-target { font-size: 13px; margin-top: 2px; color: #ccc; }
+  #hud-ratings { font-size: 12px; margin-top: 6px; color: #ffd94a; }
+  #hud-rank { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); text-align: center; text-shadow: 0 2px 4px #000; }
+  #hud-rank-name { font-size: 16px; font-weight: 700; color: #ff9a3d; }
+  #hud-xpbar { width: 180px; height: 8px; background: rgba(0,0,0,.55); border: 1px solid #888; margin-top: 3px; }
+  #hud-xp-fill { height: 100%; background: #ff9a3d; width: 0%; }
+  #hud-minimap-wrap { position: absolute; left: 16px; bottom: 16px; }
+  #hud-minimap { border: 2px solid rgba(255,255,255,.65); border-radius: 50%; background: #14161c; display: block; }
+  #hud-speed { text-align: center; font-size: 18px; font-weight: 700; margin-top: 4px; text-shadow: 0 2px 4px #000; }
+  #hud-car { position: absolute; right: 16px; bottom: 16px; text-align: right; text-shadow: 0 2px 4px #000; }
+  #hud-weapon { font-size: 18px; font-weight: 700; }
+  #hud-ammo { font-size: 15px; color: #ffd94a; }
+  #hud-carname { font-size: 15px; margin-top: 4px; }
+  #hud-carcond { font-size: 13px; color: #ccc; }
+  #hud-toasts { position: absolute; top: 90px; left: 50%; transform: translateX(-50%); text-align: center; }
+  .hud-toast { background: rgba(0,0,0,.65); border: 1px solid #ffd94a; color: #fff; padding: 8px 16px; margin-bottom: 6px; font-size: 15px; border-radius: 4px; transition: opacity .4s; }
+  .hud-toast.fade { opacity: 0; }
+  #hud-crosshair { position: fixed; font-size: 22px; font-weight: 800; color: #fff; text-shadow: 0 0 4px #000; transform: translate(-50%, -50%); display: none; }
+  #hud-hint { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); font-size: 13px; color: #ddd; text-shadow: 0 1px 3px #000; }
+  .screen { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; z-index: 10; color: #fff; text-align: center; background: rgba(5, 8, 16, 0.72); }
+  .screen h1 { font-size: 64px; margin: 0; color: #ffd94a; letter-spacing: 4px; text-shadow: 0 4px 18px #000; }
+  .screen h2 { font-size: 20px; font-weight: 400; color: #ffb36b; margin: 8px 0 4px; }
+  .screen p { max-width: 560px; line-height: 1.55; color: #ddd; }
+  .screen button { pointer-events: auto; margin-top: 18px; font-size: 20px; font-weight: 700; padding: 12px 34px; background: #ffd94a; color: #201400; border: none; border-radius: 6px; cursor: pointer; }
   .screen button:hover { background: #ffe27a; }
-  #screen-pause, #screen-busted, #screen-wasted { display: none; }
-  .hidden { display: none !important; }
+  .controls { font-size: 14px; color: #bbb; line-height: 1.9; margin-top: 10px; }
+  #result-rating { font-size: 52px; font-weight: 900; margin: 6px 0; }
+  .rating-gold { color: #ffd94a; }
+  .rating-silver { color: #d8d8d8; }
+  .rating-bronze { color: #d89a5a; }
+  #result-time, #result-reward { font-size: 20px; color: #fff; }
 </style>
 <script type="importmap">
 { "imports": { "three": "./vendor/three.min.js" } }
 </script>
 </head>
 <body>
-<div id="game"></div>
+<canvas id="game"></canvas>
+<div id="hud"></div>
 
-<div id="topleft" class="panel">
-  <div id="money">$150</div>
-  <div id="wanted">—</div>
-  <div id="rankline">RANK <span id="rank">Rookie</span></div>
-  <div id="rankbarwrap"><div id="rankfill"></div></div>
-  <div id="clockline"><span id="clock">17:30</span> &nbsp;·&nbsp; <span id="district">Downtown</span></div>
-</div>
-
-<div id="topright">
-  <div id="objective" class="panel"></div>
-  <canvas id="minimap" width="220" height="220"></canvas>
-</div>
-
-<div id="bottomleft" class="panel">
-  <div id="healthrow">HEALTH <span id="health">100</span>
-    <div id="healthbarwrap"><div id="healthfill"></div></div>
-  </div>
-  <div id="weaponrow"><span id="weapon">FISTS</span> &nbsp; <span id="ammo">∞</span></div>
-</div>
-
-<div id="bottomright" class="panel">
-  <div id="speed"></div>
-  <div id="speedunit">KM/H</div>
-  <div id="carname"></div>
-  <div id="carcond"></div>
-</div>
-
-<div id="toasts"></div>
-<div id="crosshair"></div>
-
-<div id="screen-start" class="screen">
+<div class="screen" id="screen-title" style="display:flex">
   <h1>VICE RUSH</h1>
-  <h2>Sunset Bay &nbsp;·&nbsp; an open-world crime story</h2>
-  <p>Raka is back in Sunset Bay with $150 and a fixer named Mira. Steal cars,
-  lose the cops, run the Sunset Sprint, and clear the Night Market — five jobs,
-  one city, and a helicopter if you push your luck past four stars.</p>
-  <div class="keys">
-    WASD move / drive &nbsp;·&nbsp; SHIFT run &nbsp;·&nbsp; E enter / exit car<br>
-    CLICK punch &nbsp;·&nbsp; RIGHT-CLICK shoot &nbsp;·&nbsp; 1 / 2 switch weapon<br>
-    DRAG orbit camera &nbsp;·&nbsp; WHEEL zoom &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M mute
+  <h2>Sunset Bay — an open-world crime story</h2>
+  <p>Raka is back in Sunset Bay with $150 and a phone full of jobs from Mira.
+  Five missions, a city that never sleeps, cops on every corner — and ten
+  Sunset Coins hidden from the plaza to the far beach. Steal cars, lose the
+  heat, win the Sprint, and own the night market.</p>
+  <button id="start-btn">▶ START GAME</button>
+  <div class="controls">
+    WASD / Arrows — drive &amp; walk &nbsp;•&nbsp; E — enter / exit car &nbsp;•&nbsp; Mouse — aim, Click — punch / shoot<br>
+    1 / 2 — fists / pistol &nbsp;•&nbsp; R — reload &nbsp;•&nbsp; Shift — sprint &nbsp;•&nbsp; P — pause &nbsp;•&nbsp; M — mute
   </div>
-  <button id="start-btn">START GAME</button>
 </div>
 
-<div id="screen-pause" class="screen">
+<div class="screen" id="screen-pause">
   <h1>PAUSED</h1>
-  <p>Sunset Bay waits for no one — except right now.</p>
+  <p>Take a breath. Sunset Bay waits.</p>
   <button id="resume-btn">RESUME</button>
-  <button id="restart-btn">RESTART RUN</button>
+  <button id="restart-btn">RESTART AT SPAWN</button>
 </div>
 
-<div id="screen-busted" class="screen">
+<div class="screen" id="screen-result">
+  <h1 id="result-title">MISSION COMPLETE</h1>
+  <div id="result-rating" class="rating-gold">GOLD</div>
+  <div id="result-time">Time 00:00</div>
+  <div id="result-reward">+$0 • +0 XP</div>
+  <button id="result-btn">CONTINUE (Space)</button>
+</div>
+
+<div class="screen" id="screen-busted">
   <h1>BUSTED</h1>
-  <p>The Sunset Bay police took you in. $100 bail, and the heat is off — for now.</p>
+  <p>The Sunset Bay PD caught you. Bail cost you $100 — the streets are
+  still yours, if you are fast enough.</p>
   <button id="busted-btn">BACK TO THE STREETS</button>
 </div>
 
-<div id="screen-wasted" class="screen">
+<div class="screen" id="screen-wasted">
   <h1>WASTED</h1>
-  <p>Raka is down. The city keeps moving without you.</p>
-  <button id="wasted-btn">TRY AGAIN</button>
+  <p>You went down in Sunset Bay. The clinic patched you up for $150.</p>
+  <button id="wasted-btn">BACK TO THE STREETS</button>
 </div>
 
 <script type="module" src="./src/main.js"></script>

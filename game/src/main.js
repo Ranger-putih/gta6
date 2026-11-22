@@ -1,96 +1,70 @@
-// Vice Rush — the entry point. It builds the renderer, the world and
-// the HUD, then either stages one frozen screenshot scene (?shot=) or
-// runs the live game: title screen, Space to start, and a frame loop
-// that steps the world and paints it. A few handles are left on window
-// for play-testing and for the clip tools: __world, __screen, __log,
-// __snapCamera, __camera and __input.
+// Vice Rush entry point: builds the world, runs the frame loop, wires the
+// debug hooks the play-test driver uses, and runs the ?shot= presets that
+// produce the four screenshots.
 
-import { Render } from './render.js';
+import * as THREE from 'three';
 import { World } from './world.js';
-import { Hud } from './hud.js';
-import { input } from './input.js';
-import { audio } from './audio.js';
 import { runShot } from './shots.js';
 
-const container = document.getElementById('game');
-const render = new Render(container);
-const world = new World(render.scene);
-const hud = new Hud();
-world.hud = hud;
-input.bind(render.canvas);
-input.onPauseRequest = () => {
-  if (world.state === 'playing') world.pause();
-};
+const params = new URLSearchParams(window.location.search);
+const shotId = params.get('shot');
+const seed = Number(params.get('seed') || 7);
+
+const canvas = document.getElementById('game');
+const world = new World(canvas);
 
 window.__world = world;
-window.__camera = render.camera;
-window.__input = input;
-window.__log = [];
-window.__snapCamera = () => render.snapCamera(world);
-Object.defineProperty(window, '__screen', {
-  get() { return world.state; },
+window.__camera = world.camera;
+window.__input = world.input;
+window.__log = world._log;
+window.__state = () => world.stateSnapshot();
+window.__driveTo = (x, z) => world.driveTo(x, z);
+window.__unstick = () => world.unstick();
+window.__teleport = (x, z) => world.teleport(x, z);
+window.__snapCamera = (x, y, z, tx, ty, tz) => world.snapCamera(x, y, z, tx, ty, tz);
+window.__shotReady = false;
+
+window.addEventListener('resize', () => {
+  world.camera.aspect = window.innerWidth / window.innerHeight;
+  world.camera.updateProjectionMatrix();
+  world.renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-function startGame() {
-  audio.ensure();
-  audio.click();
-  world.respawn();
-  hud.showScreen(null);
-  window.__log.push({ type: 'startGame', t: world.time });
-}
+let last = performance.now();
+let shotStarted = false;
 
-function endGame(kind) {
-  window.__log.push({ type: 'endGame', kind, t: world.time });
-  world.respawn();
-  hud.showScreen('start');
-}
-
-document.getElementById('start-btn').addEventListener('click', startGame);
-document.getElementById('resume-btn').addEventListener('click', () => {
-  audio.click();
-  world.resume();
-});
-document.getElementById('restart-btn').addEventListener('click', () => {
-  startGame();
-});
-document.getElementById('busted-btn').addEventListener('click', () => endGame('busted'));
-document.getElementById('wasted-btn').addEventListener('click', () => endGame('wasted'));
-
-const params = new URLSearchParams(window.location.search);
-const shot = params.get('shot');
-const seed = parseInt(params.get('seed') || '1', 10);
-
-if (shot) {
-  // Staged screenshot mode: pose the world, paint, signal readiness,
-  // and never start the live loop.
-  if (shot !== 'start') hud.showScreen(null);
-  runShot(world, render, shot, Number.isFinite(seed) ? seed : 1);
-} else {
-  // The live game: title screen first, Space or a click to start.
-  hud.showScreen('start');
-  world.state = 'title';
-  const onConfirm = () => {
-    if (world.state === 'title') startGame();
-  };
-  window.addEventListener('keydown', (e) => {
-    if ((e.code === 'Space' || e.code === 'Enter') && world.state === 'title') {
-      e.preventDefault();
-      onConfirm();
-    }
-  });
-  render.canvas.addEventListener('mousedown', () => {
-    if (world.state === 'title') onConfirm();
-  });
-
-  let last = performance.now();
-  function frame(now) {
-    const dt = Math.min(0.05, (now - last) / 1000);
-    last = now;
-    if (world.state === 'playing') world.step(dt);
-    render.updateDayNight(world.clockHours);
-    render.follow(world, dt, false);
-    render.render();
-    requestAnimationFrame(frame);
-  }
+function frame(now) {
   requestAnimationFrame(frame);
+  const dt = Math.min((now - last) / 1000, 0.1);
+  last = now;
+
+  // Keys that only matter outside the playing state.
+  const input = world.input;
+  if (world.state === 'title' && (input.pressed('Space') || input.pressed('Enter'))) {
+    world.startGame();
+  } else if (world.state === 'paused' && (input.pressed('KeyP') || input.pressed('Escape'))) {
+    world.resume();
+  } else if (world.state === 'result' && (input.pressed('Space') || input.pressed('Enter'))) {
+    world.continueAfterResult();
+  } else if ((world.state === 'busted' || world.state === 'wasted') && input.pressed('Enter')) {
+    world.respawn(world.state);
+  }
+
+  if (shotId && !shotStarted) {
+    shotStarted = true;
+    world.startGame();
+    runShot(world, shotId, seed).then(() => {
+      world.frozen = true;
+      world.step(0.016);
+      window.__shotReady = true;
+    }).catch((err) => {
+      window.__shotError = String(err && err.message || err);
+    });
+  }
+
+  world.step(dt);
+  world.renderer.render(world.scene, world.camera);
+  input.endFrame();
 }
+
+requestAnimationFrame(frame);

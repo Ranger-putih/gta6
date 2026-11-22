@@ -1,144 +1,190 @@
-// Cars for Vice Rush. Every vehicle is a few boxes and cylinders, so the
-// whole fleet costs almost nothing to draw. A car is a model (its shape
-// and speed), a mesh, and a little physics: accelerate, brake, steer,
-// and slide along building walls instead of sinking into them.
-// Forward is (sin(heading), cos(heading)): heading PI faces north.
+// Vehicles for Vice Rush: low-poly cars and a bike built from boxes and
+// cylinders, plus the Car class that drives them with simple arcade physics.
 
 import * as THREE from 'three';
-import { CAR_MODELS } from './config.js';
 
-function box(w, h, d, color, x, y, z, emissive) {
-  const mat = new THREE.MeshLambertMaterial({ color });
-  if (emissive) mat.emissive = new THREE.Color(emissive);
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-  m.position.set(x, y, z);
-  m.castShadow = false;
-  return m;
-}
+const MODEL_STATS = {
+  sedan: { top: 30, accel: 13, turn: 1.9, len: 4.4, wid: 1.9, height: 0.85 },
+  sports: { top: 42, accel: 18, turn: 2.1, len: 4.2, wid: 1.8, height: 0.7 },
+  suv: { top: 27, accel: 11, turn: 1.7, len: 4.8, wid: 2.0, height: 1.1 },
+  pickup: { top: 28, accel: 12, turn: 1.8, len: 5.0, wid: 2.0, height: 1.0 },
+  bike: { top: 38, accel: 16, turn: 2.4, len: 2.4, wid: 0.7, height: 0.8 },
+  cruiser: { top: 34, accel: 15, turn: 2.0, len: 4.6, wid: 1.9, height: 0.9 },
+};
 
-function wheel(x, z) {
-  const m = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.36, 0.36, 0.28, 10),
-    new THREE.MeshLambertMaterial({ color: 0x111111 }),
+export function buildCarMesh(color, model = 'sedan') {
+  const stats = MODEL_STATS[model] || MODEL_STATS.sedan;
+  const group = new THREE.Group();
+  group.name = `car-${model}`;
+  const bodyMat = new THREE.MeshLambertMaterial({ color });
+  const darkMat = new THREE.MeshLambertMaterial({ color: 0x1a1d22 });
+  const glassMat = new THREE.MeshLambertMaterial({ color: 0x9fc4d8 });
+
+  if (model === 'bike') {
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 2.2), bodyMat);
+    frame.position.y = 0.55;
+    group.add(frame);
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.15, 0.9), darkMat);
+    seat.position.set(0, 0.85, -0.3);
+    group.add(seat);
+    const wheelGeo = new THREE.CylinderGeometry(0.38, 0.38, 0.18, 12);
+    for (const z of [-0.85, 0.85]) {
+      const w = new THREE.Mesh(wheelGeo, darkMat);
+      w.rotation.z = Math.PI / 2;
+      w.position.set(0, 0.38, z);
+      group.add(w);
+    }
+    const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.15, 0.1), new THREE.MeshBasicMaterial({ color: 0xfff2c0 }));
+    lamp.position.set(0, 0.6, 1.12);
+    group.add(lamp);
+    group.userData.stats = stats;
+    return group;
+  }
+
+  const body = new THREE.Mesh(new THREE.BoxGeometry(stats.wid, stats.height, stats.len), bodyMat);
+  body.position.y = stats.height / 2 + 0.35;
+  group.add(body);
+
+  const cabinLen = model === 'pickup' ? stats.len * 0.32 : stats.len * 0.45;
+  const cabin = new THREE.Mesh(
+    new THREE.BoxGeometry(stats.wid * 0.82, stats.height * 0.75, cabinLen),
+    glassMat,
   );
-  m.rotation.z = Math.PI / 2;
-  m.position.set(x, 0.36, z);
-  return m;
+  cabin.position.set(0, stats.height + 0.35 + stats.height * 0.3, model === 'pickup' ? stats.len * 0.18 : -stats.len * 0.05);
+  group.add(cabin);
+
+  if (model === 'pickup') {
+    const bed = new THREE.Mesh(new THREE.BoxGeometry(stats.wid * 0.9, 0.4, stats.len * 0.4), darkMat);
+    bed.position.set(0, stats.height + 0.35, -stats.len * 0.26);
+    group.add(bed);
+  }
+
+  const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.3, 12);
+  const wheels = [];
+  for (const [wx, wz] of [
+    [-stats.wid / 2, stats.len * 0.32],
+    [stats.wid / 2, stats.len * 0.32],
+    [-stats.wid / 2, -stats.len * 0.32],
+    [stats.wid / 2, -stats.len * 0.32],
+  ]) {
+    const w = new THREE.Mesh(wheelGeo, darkMat);
+    w.rotation.z = Math.PI / 2;
+    w.position.set(wx, 0.36, wz);
+    group.add(w);
+    wheels.push(w);
+  }
+  group.userData.wheels = wheels;
+
+  const headMat = new THREE.MeshBasicMaterial({ color: 0xfff2c0 });
+  for (const hx of [-stats.wid * 0.3, stats.wid * 0.3]) {
+    const h = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.16, 0.08), headMat);
+    h.position.set(hx, stats.height * 0.6 + 0.35, stats.len / 2 + 0.02);
+    group.add(h);
+  }
+  const tailMat = new THREE.MeshBasicMaterial({ color: 0xd83a2e });
+  for (const hx of [-stats.wid * 0.3, stats.wid * 0.3]) {
+    const t = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.14, 0.08), tailMat);
+    t.position.set(hx, stats.height * 0.6 + 0.35, -stats.len / 2 - 0.02);
+    group.add(t);
+  }
+
+  if (model === 'cruiser') {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.18, 0.3), new THREE.MeshBasicMaterial({ color: 0x2e6fd8 }));
+    bar.position.set(0, stats.height + 0.35 + stats.height * 0.72, -stats.len * 0.05);
+    group.add(bar);
+  }
+
+  group.userData.stats = stats;
+  return group;
 }
 
-// Build the visible mesh for a model. The sports car is long and low,
-// the van is a tall box, the pickup has an open bed, the taxi wears a
-// roof sign, the bike is a narrow frame with two wheels, and the police
-// cruiser carries a light bar.
-export function buildCarMesh(modelKey) {
-  const model = CAR_MODELS[modelKey] || CAR_MODELS.sedan;
-  const g = new THREE.Group();
-  const c = model.color;
-
-  if (modelKey === 'bike') {
-    g.add(box(0.5, 0.5, 1.9, c, 0, 0.75, 0));
-    g.add(box(0.4, 0.35, 0.5, 0x333333, 0, 1.05, -0.3));
-    const w1 = wheel(0, 0.75);
-    const w2 = wheel(0, -0.75);
-    w1.scale.set(1, 1, 0.6);
-    w2.scale.set(1, 1, 0.6);
-    g.add(w1, w2);
-    g.add(box(0.1, 0.1, 0.7, 0x888888, 0, 1.1, 0.6));
-    return g;
-  }
-
-  const long = modelKey === 'sports' ? 4.6 : modelKey === 'van' ? 4.4 : 4.2;
-  const wide = modelKey === 'van' ? 2.1 : 1.9;
-  const low = modelKey === 'sports' ? 0.55 : 0.75;
-  g.add(box(wide, low, long, c, 0, 0.65, 0));
-  if (modelKey === 'van') {
-    g.add(box(wide - 0.2, 0.9, long - 1.2, 0xdfe6ee, 0, 1.5, -0.2));
-  } else if (modelKey === 'pickup') {
-    g.add(box(wide - 0.2, 0.55, 1.6, 0x222222, 0, 0.95, -1.0));
-    g.add(box(wide - 0.3, 0.6, 1.2, c, 0, 1.15, 0.9));
-  } else {
-    g.add(box(wide - 0.3, 0.55, long * 0.45, 0x1a2a3a, 0, 1.15, -0.2));
-  }
-  if (modelKey === 'taxi') {
-    g.add(box(0.7, 0.18, 0.4, 0xffd400, 0, 1.55, -0.2, 0x664400));
-  }
-  if (modelKey === 'police') {
-    g.add(box(1.2, 0.14, 0.5, 0xffffff, 0, 1.5, -0.2));
-    g.add(box(0.5, 0.12, 0.3, 0xff2222, -0.35, 1.62, -0.2, 0xff2222));
-    g.add(box(0.5, 0.12, 0.3, 0x2244ff, 0.35, 1.62, -0.2, 0x2244ff));
-  }
-  g.add(box(0.3, 0.18, 0.1, 0xfff2b0, -0.6, 0.7, long / 2, 0xaa8800));
-  g.add(box(0.3, 0.18, 0.1, 0xfff2b0, 0.6, 0.7, long / 2, 0xaa8800));
-  g.add(box(0.25, 0.15, 0.08, 0xff2222, -0.6, 0.7, -long / 2, 0x550000));
-  g.add(box(0.25, 0.15, 0.08, 0xff2222, 0.6, 0.7, -long / 2, 0x550000));
-  g.add(wheel(-wide / 2, long * 0.32));
-  g.add(wheel(wide / 2, long * 0.32));
-  g.add(wheel(-wide / 2, -long * 0.32));
-  g.add(wheel(wide / 2, -long * 0.32));
-  return g;
-}
-
+// A drivable car: heading in radians, forward = (sin h, cos h) in x/z.
 export class Car {
-  constructor(modelKey, x, z, heading) {
-    this.modelKey = modelKey;
-    this.model = CAR_MODELS[modelKey] || CAR_MODELS.sedan;
-    this.x = x;
-    this.z = z;
-    this.heading = heading;
+  constructor(mesh, opts = {}) {
+    this.mesh = mesh;
+    this.model = opts.model || 'sedan';
+    this.name = opts.name || 'Car';
+    this.stats = MODEL_STATS[this.model] || MODEL_STATS.sedan;
+    this.heading = opts.heading || 0;
     this.speed = 0;
     this.health = 100;
-    this.parked = false;
-    this.traffic = false;
-    this.driver = null;
-    this.mesh = buildCarMesh(modelKey);
-    this.syncMesh();
-  }
-
-  get forwardX() {
-    return Math.sin(this.heading);
-  }
-  get forwardZ() {
-    return Math.cos(this.heading);
-  }
-
-  get condition() {
-    return Math.max(0, Math.round(this.health));
-  }
-
-  syncMesh() {
+    this.x = opts.x || 0;
+    this.z = opts.z || 0;
+    this.stolen = false;
+    this.isTraffic = !!opts.isTraffic;
     this.mesh.position.set(this.x, 0, this.z);
     this.mesh.rotation.y = this.heading;
   }
 
-  // One physics step. throttle in [-1, 1], steer in [-1, 1]. collide is
-  // a function (x, z, radius) that answers whether a spot is blocked.
-  drive(dt, throttle, steer, collide) {
-    const m = this.model;
-    if (throttle > 0) this.speed += m.accel * throttle * dt;
-    else if (throttle < 0) this.speed += (this.speed > 0.5 ? -30 : -8) * dt;
-    else this.speed -= Math.sign(this.speed) * Math.min(Math.abs(this.speed), 8 * dt);
-    if (this.speed > m.top) this.speed = m.top;
-    if (this.speed < -10) this.speed = -10;
-    // Steering bites less the faster the car goes.
-    const steerRate = 1.9 * m.grip * Math.max(0.35, 1 - Math.abs(this.speed) / (m.top * 1.6));
-    // D decreases the heading (the car veers east when facing north).
-    this.heading -= steer * steerRate * dt * Math.sign(this.speed || 1);
-    const nx = this.x + this.forwardX * this.speed * dt;
-    const nz = this.z + this.forwardZ * this.speed * dt;
-    const r = this.modelKey === 'bike' ? 0.9 : 1.4;
-    if (collide && collide(nx, nz, r)) {
-      // A wall: stop, take a little damage, and slide along it.
-      if (Math.abs(this.speed) > 6) this.health = Math.max(0, this.health - Math.abs(this.speed) * 0.35);
-      this.speed *= 0.4;
-    } else {
-      this.x = nx;
-      this.z = nz;
+  get pos() {
+    return { x: this.x, z: this.z };
+  }
+
+  forward() {
+    return { x: Math.sin(this.heading), z: Math.cos(this.heading) };
+  }
+
+  // throttle -1..1, steer -1..1, dt seconds. Returns distance moved.
+  drive(throttle, steer, dt, colliders) {
+    const st = this.stats;
+    const prevX = this.x;
+    const prevZ = this.z;
+    if (throttle > 0) this.speed += st.accel * throttle * dt;
+    else if (throttle < 0) this.speed += st.accel * 1.4 * throttle * dt;
+    else this.speed -= Math.sign(this.speed) * Math.min(Math.abs(this.speed), 6 * dt);
+    const top = throttle < 0 ? 10 : st.top;
+    this.speed = Math.max(-10, Math.min(top, this.speed));
+    if (Math.abs(this.speed) > 0.05) {
+      const dir = this.speed >= 0 ? 1 : -1;
+      this.heading += steer * st.turn * dt * dir * Math.min(1, Math.abs(this.speed) / 8 + 0.25);
     }
-    this.syncMesh();
+    const f = this.forward();
+    this.x += f.x * this.speed * dt;
+    this.z += f.z * this.speed * dt;
+    this.x = Math.max(-196, Math.min(196, this.x));
+    this.z = Math.max(-196, Math.min(196, this.z));
+    if (colliders) {
+      const hit = this._collide(colliders);
+      if (hit) {
+        const impact = Math.abs(this.speed);
+        if (impact > 8) this.damage(impact * 0.4);
+        this.speed *= 0.25;
+      }
+    }
+    this.mesh.position.set(this.x, 0, this.z);
+    this.mesh.rotation.y = this.heading;
+    if (this.mesh.userData.wheels) {
+      for (const w of this.mesh.userData.wheels) w.rotation.x += this.speed * dt * 2;
+    }
+    return Math.hypot(this.x - prevX, this.z - prevZ);
+  }
+
+  _collide(colliders) {
+    const r = Math.max(this.stats.len, this.stats.wid) / 2;
+    for (const box of colliders) {
+      const cx = Math.max(box.minX, Math.min(this.x, box.maxX));
+      const cz = Math.max(box.minZ, Math.min(this.z, box.maxZ));
+      const dx = this.x - cx;
+      const dz = this.z - cz;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < r * r) {
+        let d = Math.sqrt(d2);
+        if (d < 0.001) {
+          this.x = box.maxX + r;
+          return true;
+        }
+        const push = r - d;
+        this.x += (dx / d) * push;
+        this.z += (dz / d) * push;
+        return true;
+      }
+    }
+    return false;
   }
 
   damage(amount) {
     this.health = Math.max(0, this.health - amount);
+    return this.health;
   }
 
   repair() {
